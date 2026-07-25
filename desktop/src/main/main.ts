@@ -45,7 +45,13 @@ import {
   recordSupportSuggestion,
   pruneActivity,
 } from './activity-store';
-import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
+import { readConversations, saveConversation } from './conversation-store';
+import {
+  cleanObservation,
+  AI_TOOLS,
+  resolveAiTools,
+  parseAiTool,
+} from '../renderer/components/observation-types';
 import type {
   ObservationStatus,
   AiToolButton,
@@ -140,7 +146,8 @@ let isFloatMode = true;
 let isQuitting = false;
 
 // ── User profile ──────────────────────────────────────────────────────────────
-const profilePath = () => path.join(app.getPath('userData'), 'coco-profile.json');
+const profilePath = () =>
+  path.join(app.getPath('userData'), 'coco-profile.json');
 
 const isOnboardingComplete = (): boolean => {
   try {
@@ -305,7 +312,9 @@ const createChatWindow = () => {
     }
   });
 
-  chatWindow.on('closed', () => { chatWindow = null; });
+  chatWindow.on('closed', () => {
+    chatWindow = null;
+  });
 
   chatWindow.webContents.setWindowOpenHandler((edata) => {
     shell.openExternal(edata.url);
@@ -368,7 +377,9 @@ function createTray(): void {
       {
         label: 'Open Chat',
         click: () => {
-          openCoco().catch((err) => log.warn(`[Tray] Could not open Coco: ${err}`));
+          openCoco().catch((err) =>
+            log.warn(`[Tray] Could not open Coco: ${err}`),
+          );
         },
       },
       {
@@ -427,7 +438,10 @@ const openChatForSession = (
   if (!chatWindow) return;
 
   const send = () => {
-    chatWindow?.webContents.send('session-init', { sessionId, problemStatement });
+    chatWindow?.webContents.send('session-init', {
+      sessionId,
+      problemStatement,
+    });
     if (seed) chatWindow?.webContents.send('help-request', seed);
   };
   if (alreadyLoaded) {
@@ -472,7 +486,9 @@ const showSessionSetupWindow = async (taskLabel: string | null) => {
     sessionSetupWindow?.webContents.send('session-setup-init', { taskLabel });
   });
 
-  sessionSetupWindow.on('closed', () => { sessionSetupWindow = null; });
+  sessionSetupWindow.on('closed', () => {
+    sessionSetupWindow = null;
+  });
 };
 
 // ── Notification bubble window ────────────────────────────────────────────────
@@ -506,7 +522,9 @@ const showNotification = (payload: {
     notificationWindow &&
     !notificationWindow.isDestroyed()
   ) {
-    log.info('[Notification] Keeping hovered notification; dropping replacement.');
+    log.info(
+      '[Notification] Keeping hovered notification; dropping replacement.',
+    );
     return;
   }
   // Destroy any existing notification before showing a new one (dedup guard).
@@ -616,20 +634,35 @@ ipcMain.on('open-main-window', () => {
 //     seeded with what the user was doing, then inject the observation as the
 //     first message once the chat panel has loaded.
 ipcMain.removeAllListeners('help-me-with-this');
-ipcMain.on('help-me-with-this', async (_event, payload: { phrase: string; label: string; rawObservation: string }) => {
-  if (isSessionActive && currentSessionId) {
-    openChatForSession(currentSessionId, pendingTaskLabel || '', payload);
-    return;
-  }
+ipcMain.on(
+  'help-me-with-this',
+  async (
+    _event,
+    payload: { phrase: string; label: string; rawObservation: string },
+  ) => {
+    if (isSessionActive && currentSessionId) {
+      openChatForSession(currentSessionId, pendingTaskLabel || '', payload);
+      return;
+    }
 
-  // Pre-session: create a session, then inject the observation once it loads.
-  const problemStatement =
-    payload?.phrase?.trim() || payload?.label?.trim() || pendingTaskLabel || 'General help session';
-  const sessionId = await createProactiveTutorSession(problemStatement, 120, payload);
-  if (!sessionId) {
-    log.warn('[Chat] Could not start a local tutor session for help-me-with-this.');
-  }
-});
+    // Pre-session: create a session, then inject the observation once it loads.
+    const problemStatement =
+      payload?.phrase?.trim() ||
+      payload?.label?.trim() ||
+      pendingTaskLabel ||
+      'General help session';
+    const sessionId = await createProactiveTutorSession(
+      problemStatement,
+      120,
+      payload,
+    );
+    if (!sessionId) {
+      log.warn(
+        '[Chat] Could not start a local tutor session for help-me-with-this.',
+      );
+    }
+  },
+);
 
 ipcMain.removeAllListeners('open-notification-suggestion');
 ipcMain.on(
@@ -659,19 +692,21 @@ ipcMain.on(
       });
     }
     const sensingPort = process.env.SENSING_PORT || '8080';
-    axios.post(
-      `http://127.0.0.1:${sensingPort}/feedback`,
-      {
-        kind: 'engage',
-        surface: 'notification',
-        observation_id: observationId ?? null,
-        status,
-        text: rawObservation,
-      },
-      { timeout: 3000 },
-    ).catch((err) => {
-      log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
-    });
+    axios
+      .post(
+        `http://127.0.0.1:${sensingPort}/feedback`,
+        {
+          kind: 'engage',
+          surface: 'notification',
+          observation_id: observationId ?? null,
+          status,
+          text: rawObservation,
+        },
+        { timeout: 3000 },
+      )
+      .catch((err) => {
+        log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+      });
 
     if (isSessionActive && currentSessionId) {
       openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
@@ -691,11 +726,17 @@ ipcMain.removeAllListeners('training-feedback');
 ipcMain.on('training-feedback', async (_event, payload) => {
   try {
     const sensingPort = process.env.SENSING_PORT || '8080';
-    await axios.post(`http://127.0.0.1:${sensingPort}/feedback`, payload ?? {}, {
-      timeout: 3000,
-    });
+    await axios.post(
+      `http://127.0.0.1:${sensingPort}/feedback`,
+      payload ?? {},
+      {
+        timeout: 3000,
+      },
+    );
   } catch (err) {
-    log.warn(`[Feedback] failed to post: ${(err as { message?: string })?.message}`);
+    log.warn(
+      `[Feedback] failed to post: ${(err as { message?: string })?.message}`,
+    );
   }
 });
 
@@ -774,26 +815,33 @@ ipcMain.on('avatar-renderer-ready', () => {
 // Webapp signals that a tutor session is now active (or has ended).
 // Payload: { active: boolean; sessionId?: string }
 ipcMain.removeAllListeners('session-active');
-ipcMain.on('session-active', (_event, payload: { active: boolean; sessionId?: string }) => {
-  isSessionActive = payload.active;
-  if (payload.active && payload.sessionId) {
-    currentSessionId = payload.sessionId;
-    // Dismiss the onboarding overlay if still open — a live session takes over.
-    if (onboardingWindow && !onboardingWindow.isDestroyed()) {
-      onboardingWindow.destroy();
-      onboardingWindow = null;
+ipcMain.on(
+  'session-active',
+  (_event, payload: { active: boolean; sessionId?: string }) => {
+    isSessionActive = payload.active;
+    if (payload.active && payload.sessionId) {
+      currentSessionId = payload.sessionId;
+      // Dismiss the onboarding overlay if still open — a live session takes over.
+      if (onboardingWindow && !onboardingWindow.isDestroyed()) {
+        onboardingWindow.destroy();
+        onboardingWindow = null;
+      }
     }
-  }
-  if (!payload.active) {
-    currentSessionId = null;
-    // Tell sensing server to revert to pre-session observation mode.
-    const sensingPort = process.env.SENSING_PORT || '8080';
-    axios
-      .post(`http://127.0.0.1:${sensingPort}/session/end`)
-      .catch((e) => log.warn('Could not notify sensing server of session end:', e));
-  }
-  log.info(`[ProactiveSession] isSessionActive=${payload.active}, sessionId=${payload.sessionId}`);
-});
+    if (!payload.active) {
+      currentSessionId = null;
+      // Tell sensing server to revert to pre-session observation mode.
+      const sensingPort = process.env.SENSING_PORT || '8080';
+      axios
+        .post(`http://127.0.0.1:${sensingPort}/session/end`)
+        .catch((e) =>
+          log.warn('Could not notify sensing server of session end:', e),
+        );
+    }
+    log.info(
+      `[ProactiveSession] isSessionActive=${payload.active}, sessionId=${payload.sessionId}`,
+    );
+  },
+);
 
 // User clicked "Yes" in the "start a session?" notification.
 // Main shows the mini session-setup window.
@@ -822,7 +870,10 @@ function readProfile(): {
     if (Array.isArray(profile.aiTools) && profile.aiTools.length > 0) {
       aiTools = profile.aiTools;
     }
-    if (typeof profile.customSystemPrompt === 'string' && profile.customSystemPrompt.trim()) {
+    if (
+      typeof profile.customSystemPrompt === 'string' &&
+      profile.customSystemPrompt.trim()
+    ) {
       customObserverPrompt = profile.customSystemPrompt;
     }
     // "Custom" mode customizes only the sensing observer prompt. The judge/tutor
@@ -853,7 +904,10 @@ interface InstantSuggestion {
   llm_metrics?: LLMCallMetrics;
 }
 
-const suggestionCache = new Map<string, { ts: number; promise: Promise<InstantSuggestion | null> }>();
+const suggestionCache = new Map<
+  string,
+  { ts: number; promise: Promise<InstantSuggestion | null> }
+>();
 const SUGGESTION_TTL_MS = 5 * 60_000;
 // Model latency can exceed 12 seconds under load. Keep the eager request alive
 // long enough for the notification click to reveal its result instead of
@@ -906,7 +960,9 @@ function openAiTool(toolId: string): void {
       if (err) log.warn(`[Suggestion] Failed to open ${app}: ${err.message}`);
     });
   } else {
-    log.warn(`[Suggestion] Launching ${tool.label} (${open.via}) is only supported on macOS.`);
+    log.warn(
+      `[Suggestion] Launching ${tool.label} (${open.via}) is only supported on macOS.`,
+    );
   }
 }
 
@@ -935,7 +991,9 @@ function precomputeSuggestion(event: {
   const { aiTools, scenario } = readProfile();
   const tutorPort = process.env.TUTOR_PORT || '8081';
   const startedAt = Date.now();
-  log.info(`[InstantSuggestion] precompute start id=${id} status=${event.status}`);
+  log.info(
+    `[InstantSuggestion] precompute start id=${id} status=${event.status}`,
+  );
   const promise = axios
     .post(
       `http://127.0.0.1:${tutorPort}/suggestion/instant`,
@@ -951,11 +1009,15 @@ function precomputeSuggestion(event: {
     .then((resp) => {
       const data = resp.data as InstantSuggestion;
       recordSupportSuggestion(id, data);
-      log.info(`[InstantSuggestion] precompute ready id=${id} kind=${data?.kind} in ${Date.now() - startedAt}ms`);
+      log.info(
+        `[InstantSuggestion] precompute ready id=${id} kind=${data?.kind} in ${Date.now() - startedAt}ms`,
+      );
       return data;
     })
     .catch((err) => {
-      log.warn(`[InstantSuggestion] precompute failed for ${id} after ${Date.now() - startedAt}ms: ${(err as { message?: string })?.message}`);
+      log.warn(
+        `[InstantSuggestion] precompute failed for ${id} after ${Date.now() - startedAt}ms: ${(err as { message?: string })?.message}`,
+      );
       return null;
     });
   suggestionCache.set(id, { ts: Date.now(), promise });
@@ -1006,7 +1068,10 @@ ipcMain.handle(
 ipcMain.removeAllListeners('suggestion-action');
 ipcMain.on(
   'suggestion-action',
-  (_event, { toolId, copyText }: { toolId?: string | null; copyText?: string }) => {
+  (
+    _event,
+    { toolId, copyText }: { toolId?: string | null; copyText?: string },
+  ) => {
     if (copyText) clipboard.writeText(copyText);
     if (toolId) openAiTool(toolId);
   },
@@ -1111,21 +1176,35 @@ async function createProactiveTutorSession(
   // Configure the tutor conversation (the chat only needs the tutor server).
   try {
     await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
-    await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
+    await axios.post(
+      `${tutor}/config/scenario`,
+      { scenario },
+      { timeout: 8000 },
+    );
     await axios.post(
       `${tutor}/context/problem_statement`,
       { problem_statement: problemStatement },
       { timeout: 8000 },
     );
-    await axios.post(`${tutor}/context/ai_tools`, { ai_tools: aiTools }, { timeout: 8000 });
+    await axios.post(
+      `${tutor}/context/ai_tools`,
+      { ai_tools: aiTools },
+      { timeout: 8000 },
+    );
     // Re-apply the persisted long-term memory so a freshly (re)started tutor
     // process always has it, independent of its own on-disk load.
     const savedMemory = readLocalMemory();
     if (savedMemory) {
-      await axios.post(`${tutor}/context/memory`, { memory: savedMemory }, { timeout: 8000 });
+      await axios.post(
+        `${tutor}/context/memory`,
+        { memory: savedMemory },
+        { timeout: 8000 },
+      );
     }
   } catch (err) {
-    log.warn(`[ProactiveSession] Tutor context setup failed: ${(err as Error).message}`);
+    log.warn(
+      `[ProactiveSession] Tutor context setup failed: ${(err as Error).message}`,
+    );
   }
 
   // Configure the sensing session (struggle-detection window + observer prompt).
@@ -1138,12 +1217,16 @@ async function createProactiveTutorSession(
         struggle_detection_seconds: struggleSeconds,
         scenario,
         config_source: 'session_start',
-        ...(customObserverPrompt && { custom_observer_prompt: customObserverPrompt }),
+        ...(customObserverPrompt && {
+          custom_observer_prompt: customObserverPrompt,
+        }),
       },
       { timeout: 15000 },
     );
   } catch (err) {
-    log.warn(`[ProactiveSession] Sensing session setup failed (proactive disabled): ${(err as Error).message}`);
+    log.warn(
+      `[ProactiveSession] Sensing session setup failed (proactive disabled): ${(err as Error).message}`,
+    );
   }
 
   return sessionId;
@@ -1170,15 +1253,97 @@ ipcMain.handle(
   },
 );
 
+// Chat history is local-only. The renderer periodically snapshots the active
+// conversation; history reads return newest-first for the review panel.
+ipcMain.removeHandler('get-chat-conversations');
+ipcMain.handle('get-chat-conversations', () => readConversations());
+
+ipcMain.removeHandler('save-chat-conversation');
+ipcMain.handle('save-chat-conversation', (_event, payload) => {
+  saveConversation(payload ?? {});
+  return { success: true };
+});
+
+ipcMain.removeHandler('resume-chat-conversation');
+ipcMain.handle(
+  'resume-chat-conversation',
+  async (_event, { sessionId }: { sessionId?: string } = {}) => {
+    const conversation = readConversations().find(
+      (saved) => saved.sessionId === sessionId,
+    );
+    if (!conversation) {
+      return { success: false, error: 'Conversation not found.' };
+    }
+
+    const tutorPort = process.env.TUTOR_PORT || '8081';
+    const tutor = `http://127.0.0.1:${tutorPort}`;
+    const { aiTools, scenario } = readProfile();
+    try {
+      await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
+      await axios.post(
+        `${tutor}/config/scenario`,
+        { scenario },
+        { timeout: 8000 },
+      );
+      await axios.post(
+        `${tutor}/context/problem_statement`,
+        { problem_statement: conversation.problem },
+        { timeout: 8000 },
+      );
+      await axios.post(
+        `${tutor}/context/ai_tools`,
+        { ai_tools: aiTools },
+        { timeout: 8000 },
+      );
+      const savedMemory = readLocalMemory();
+      if (savedMemory) {
+        await axios.post(
+          `${tutor}/context/memory`,
+          { memory: savedMemory },
+          { timeout: 8000 },
+        );
+      }
+      await axios.post(
+        `${tutor}/context/conversation`,
+        {
+          messages: conversation.messages
+            .filter((message) => !message.isError)
+            .map(({ role, text }) => ({ role, text })),
+        },
+        { timeout: 8000 },
+      );
+      currentSessionId = conversation.sessionId;
+      isSessionActive = true;
+      pendingTaskLabel = conversation.problem;
+      return { success: true };
+    } catch (err) {
+      log.warn(
+        `[Chat] Could not resume conversation: ${(err as Error).message}`,
+      );
+      return { success: false, error: (err as Error).message };
+    }
+  },
+);
+
 // User confirmed the task + struggle-time in the session-setup window.
 ipcMain.removeAllListeners('proactive-session-confirmed');
-ipcMain.on('proactive-session-confirmed', async (_event, { struggleSeconds, taskLabel }: { struggleSeconds: number; taskLabel?: string }) => {
-  sessionSetupWindow?.destroy();
-  // Prefer the user-edited task label from the setup window; fall back to
-  // the auto-detected pendingTaskLabel, then a generic default.
-  const problemStatement = taskLabel?.trim() || pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(problemStatement, struggleSeconds);
-});
+ipcMain.on(
+  'proactive-session-confirmed',
+  async (
+    _event,
+    {
+      struggleSeconds,
+      taskLabel,
+    }: { struggleSeconds: number; taskLabel?: string },
+  ) => {
+    sessionSetupWindow?.destroy();
+    // Prefer the user-edited task label from the setup window; fall back to
+    // the auto-detected pendingTaskLabel, then a generic default.
+    const problemStatement =
+      taskLabel?.trim() || pendingTaskLabel || 'General help session';
+    await createProactiveTutorSession(problemStatement, struggleSeconds);
+  },
+);
 
 // User clicked "Yes" in the "task done?" notification — end the session.
 // Recap/rating were cloud-analytics features and are intentionally dropped in
@@ -1201,7 +1366,9 @@ function endCurrentSession() {
   const sensingPort = process.env.SENSING_PORT || '8080';
   axios
     .post(`http://127.0.0.1:${sensingPort}/session/end`)
-    .catch((e) => log.warn('Could not notify sensing server of session end:', e));
+    .catch((e) =>
+      log.warn('Could not notify sensing server of session end:', e),
+    );
 }
 
 // ── Local chat turn ────────────────────────────────────────────────────────────
@@ -1234,7 +1401,9 @@ ipcMain.handle(
         fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
         imagePaths.push(file);
       } catch (err) {
-        log.warn(`[Chat] Failed to write pasted image: ${(err as Error).message}`);
+        log.warn(
+          `[Chat] Failed to write pasted image: ${(err as Error).message}`,
+        );
       }
     }
 
@@ -1264,13 +1433,18 @@ ipcMain.handle(
       return { streamed: true };
     } catch (err) {
       const ax = err as { response?: { data?: unknown }; message?: string };
-      log.error('[Chat] streaming user prompt failed:', JSON.stringify(ax?.response?.data ?? ax?.message));
+      log.error(
+        '[Chat] streaming user prompt failed:',
+        JSON.stringify(ax?.response?.data ?? ax?.message),
+      );
       ipcEvent.sender.send('chat-stream-event', {
         requestId,
         type: 'error',
         error: 'The tutor could not generate a response. Please try again.',
       });
-      return { error: 'The tutor could not generate a response. Please try again.' };
+      return {
+        error: 'The tutor could not generate a response. Please try again.',
+      };
     } finally {
       clearTimeout(timeout);
     }
@@ -1444,7 +1618,11 @@ ipcMain.handle(
       profile.tutorScenario = scenario;
       profile.aiTools = aiTools;
       profile.hideAvatar = hideAvatar === true;
-      fs.writeFileSync(profilePath(), JSON.stringify(profile, null, 2), 'utf-8');
+      fs.writeFileSync(
+        profilePath(),
+        JSON.stringify(profile, null, 2),
+        'utf-8',
+      );
     } catch (err) {
       log.error('[Settings] Failed to persist profile:', err);
       return { success: false, error: String(err) };
@@ -1459,8 +1637,16 @@ ipcMain.handle(
     const tutor = `http://127.0.0.1:${tutorPort}`;
     const sensing = `http://127.0.0.1:${sensingPort}`;
     try {
-      await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
-      await axios.post(`${tutor}/context/ai_tools`, { ai_tools: aiTools }, { timeout: 8000 });
+      await axios.post(
+        `${tutor}/config/scenario`,
+        { scenario },
+        { timeout: 8000 },
+      );
+      await axios.post(
+        `${tutor}/context/ai_tools`,
+        { ai_tools: aiTools },
+        { timeout: 8000 },
+      );
     } catch (err) {
       log.warn(`[Settings] Tutor update failed: ${(err as Error).message}`);
     }
@@ -1475,12 +1661,16 @@ ipcMain.handle(
             struggle_detection_seconds: 120,
             scenario,
             config_source: 'settings',
-            ...(customObserverPrompt && { custom_observer_prompt: customObserverPrompt }),
+            ...(customObserverPrompt && {
+              custom_observer_prompt: customObserverPrompt,
+            }),
           },
           { timeout: 15000 },
         );
       } catch (err) {
-        log.warn(`[Settings] Sensing scenario update failed: ${(err as Error).message}`);
+        log.warn(
+          `[Settings] Sensing scenario update failed: ${(err as Error).message}`,
+        );
       }
     }
     return { success: true };
@@ -1510,32 +1700,44 @@ ipcMain.handle('get-memory', async () => {
   // First run / empty file — fall back to whatever the tutor currently holds.
   const tutorPort = process.env.TUTOR_PORT || '8081';
   try {
-    const resp = await axios.get(`http://127.0.0.1:${tutorPort}/context/memory`, { timeout: 8000 });
-    return { memory: String((resp.data as { memory?: unknown })?.memory ?? '') };
+    const resp = await axios.get(
+      `http://127.0.0.1:${tutorPort}/context/memory`,
+      { timeout: 8000 },
+    );
+    return {
+      memory: String((resp.data as { memory?: unknown })?.memory ?? ''),
+    };
   } catch {
     return { memory: '' };
   }
 });
 
 ipcMain.removeHandler('save-memory');
-ipcMain.handle('save-memory', async (_event, { memory }: { memory: string }) => {
-  // 1. Persist to disk in userData (authoritative — like the profile).
-  try {
-    fs.writeFileSync(memoryPath(), memory ?? '', 'utf-8');
-    log.info('[Memory] saved to', memoryPath());
-  } catch (err) {
-    log.error('[Memory] failed to persist:', err);
-    return { success: false, error: String(err) };
-  }
-  // 2. Apply live to the running tutor (best-effort).
-  const tutorPort = process.env.TUTOR_PORT || '8081';
-  try {
-    await axios.post(`http://127.0.0.1:${tutorPort}/context/memory`, { memory }, { timeout: 8000 });
-  } catch (err) {
-    log.warn(`[Memory] live apply failed: ${(err as Error).message}`);
-  }
-  return { success: true };
-});
+ipcMain.handle(
+  'save-memory',
+  async (_event, { memory }: { memory: string }) => {
+    // 1. Persist to disk in userData (authoritative — like the profile).
+    try {
+      fs.writeFileSync(memoryPath(), memory ?? '', 'utf-8');
+      log.info('[Memory] saved to', memoryPath());
+    } catch (err) {
+      log.error('[Memory] failed to persist:', err);
+      return { success: false, error: String(err) };
+    }
+    // 2. Apply live to the running tutor (best-effort).
+    const tutorPort = process.env.TUTOR_PORT || '8081';
+    try {
+      await axios.post(
+        `http://127.0.0.1:${tutorPort}/context/memory`,
+        { memory },
+        { timeout: 8000 },
+      );
+    } catch (err) {
+      log.warn(`[Memory] live apply failed: ${(err as Error).message}`);
+    }
+    return { success: true };
+  },
+);
 
 // IPC Handler for setting the local user id (used only to key training data).
 // There is no auth backend in the local build; the id is a stable local uuid.
@@ -1688,11 +1890,7 @@ const startObserver = () => {
       }
 
       // Always forward to avatar window for pet animation / observation bubble.
-      if (
-        !hideAvatarMode &&
-        avatarWindow &&
-        !avatarWindow.isDestroyed()
-      ) {
+      if (!hideAvatarMode && avatarWindow && !avatarWindow.isDestroyed()) {
         avatarWindow.webContents.send('observation-update', event);
       }
 
@@ -1731,18 +1929,20 @@ const startObserver = () => {
             rawObservation,
           });
           const sensingPort = process.env.SENSING_PORT || '8080';
-          axios.post(
-            `http://127.0.0.1:${sensingPort}/feedback`,
-            {
-              kind: 'shown',
-              surface: 'notification',
-              observation_id: event.observation_id ?? null,
-              status,
-            },
-            { timeout: 3000 },
-          ).catch((err) => {
-            log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
-          });
+          axios
+            .post(
+              `http://127.0.0.1:${sensingPort}/feedback`,
+              {
+                kind: 'shown',
+                surface: 'notification',
+                observation_id: event.observation_id ?? null,
+                status,
+              },
+              { timeout: 3000 },
+            )
+            .catch((err) => {
+              log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+            });
         }
       }
 
@@ -1750,11 +1950,7 @@ const startObserver = () => {
       // The sensing-side judge now owns the invite decision AND its timing
       // (it only emits a task_suggested event when it decides to invite, at
       // most once per its cooldown), so we no longer rate-limit here.
-      if (
-        !isSessionActive &&
-        status === 'task_suggested' &&
-        taskLabel
-      ) {
+      if (!isSessionActive && status === 'task_suggested' && taskLabel) {
         pendingTaskLabel = taskLabel;
         const message = `I see you're ${taskLabel}. Want me to guide you with AI tools?`;
         showNotification({
@@ -1768,7 +1964,8 @@ const startObserver = () => {
       // ── In-session: detect task completion ───────────────────────────
       if (isSessionActive && status === 'task_complete') {
         showNotification({
-          message: "Looks like your task is done. Want to wrap up this session?",
+          message:
+            'Looks like your task is done. Want to wrap up this session?',
           actionLabel: 'Yes, end session',
           cancelLabel: 'Keep going',
           notifType: 'session-end-prompt',
@@ -1813,7 +2010,12 @@ app
 
       const sensingPort = process.env.SENSING_PORT || '8080';
       const req = require('http').request(
-        { hostname: '127.0.0.1', port: sensingPort, path: '/hotkey/capture', method: 'POST' },
+        {
+          hostname: '127.0.0.1',
+          port: sensingPort,
+          path: '/hotkey/capture',
+          method: 'POST',
+        },
         (res: import('http').IncomingMessage) => {
           // Read the capture response and buffer its image, then flush to the
           // chat input bar. flushHotkeyCaptures() no-ops until the renderer is
@@ -1831,7 +2033,7 @@ app
               // Ignore malformed responses — capture still lands server-side.
             }
           });
-        }
+        },
       );
       req.on('error', () => {}); // silent if sensing server is not running
       req.end();

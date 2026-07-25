@@ -38,8 +38,14 @@ function extractJsonObject(text: string): string | null {
     let escapeNext = false;
     for (let i = start; i < text.length; i += 1) {
       const ch = text[i];
-      if (escapeNext) { escapeNext = false; continue; }
-      if (ch === '\\' && inString) { escapeNext = true; continue; }
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      if (ch === '\\' && inString) {
+        escapeNext = true;
+        continue;
+      }
       if (ch === '"') inString = !inString;
       if (!inString) {
         if (ch === '{') depth += 1;
@@ -63,26 +69,51 @@ function repairJsonEscapes(text: string): string {
   while (i < text.length) {
     if (text[i] === '\\' && i + 1 < text.length) {
       const nxt = text[i + 1];
-      if (structural.has(nxt)) { out.push(text[i], nxt); i += 2; continue; }
-      if (nxt === 'u' && i + 5 < text.length && /^[0-9a-fA-F]{4}$/.test(text.slice(i + 2, i + 6))) {
-        out.push(text.slice(i, i + 6)); i += 6; continue;
+      if (structural.has(nxt)) {
+        out.push(text[i], nxt);
+        i += 2;
+        continue;
+      }
+      if (
+        nxt === 'u' &&
+        i + 5 < text.length &&
+        /^[0-9a-fA-F]{4}$/.test(text.slice(i + 2, i + 6))
+      ) {
+        out.push(text.slice(i, i + 6));
+        i += 6;
+        continue;
       }
       if (ambiguous.has(nxt)) {
         const after = i + 2 < text.length ? text[i + 2] : '';
-        if (/[a-zA-Z]/.test(after)) { out.push('\\\\'); i += 1; continue; }
-        out.push(text[i], nxt); i += 2; continue;
+        if (/[a-zA-Z]/.test(after)) {
+          out.push('\\\\');
+          i += 1;
+          continue;
+        }
+        out.push(text[i], nxt);
+        i += 2;
+        continue;
       }
-      out.push('\\\\'); i += 1; continue;
+      out.push('\\\\');
+      i += 1;
+      continue;
     }
-    out.push(text[i]); i += 1;
+    out.push(text[i]);
+    i += 1;
   }
   return out.join('');
 }
 
 function parseGuidance(raw: string): Guidance {
   const tryParse = (s: string): any => {
-    try { return JSON.parse(s); } catch {
-      try { return JSON.parse(repairJsonEscapes(s)); } catch { return null; }
+    try {
+      return JSON.parse(s);
+    } catch {
+      try {
+        return JSON.parse(repairJsonEscapes(s));
+      } catch {
+        return null;
+      }
     }
   };
   let obj: any = tryParse(raw.trim());
@@ -112,16 +143,25 @@ function parseGuidance(raw: string): Guidance {
 
 // Hide fenced python/visualization code from the chat prose.
 const VIZ_CODE_LANGS = new Set(['python', 'py']);
-const markdownComponents: React.ComponentProps<typeof Markdown>['components'] = {
-  code({ inline, className, children, ...props }: any) {
-    const lang = /language-(\w+)/.exec(className || '')?.[1]?.toLowerCase();
-    if (!inline && lang && VIZ_CODE_LANGS.has(lang)) return null;
-    return <code className={className} {...props}>{children}</code>;
-  },
-  a({ href, children, ...props }: any) {
-    return <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>;
-  },
-};
+const markdownComponents: React.ComponentProps<typeof Markdown>['components'] =
+  {
+    code({ inline, className, children, ...props }: any) {
+      const lang = /language-(\w+)/.exec(className || '')?.[1]?.toLowerCase();
+      if (!inline && lang && VIZ_CODE_LANGS.has(lang)) return null;
+      return (
+        <code className={className} {...props}>
+          {children}
+        </code>
+      );
+    },
+    a({ href, children, ...props }: any) {
+      return (
+        <a href={href} target="_blank" rel="noreferrer" {...props}>
+          {children}
+        </a>
+      );
+    },
+  };
 
 // ── Message model ──────────────────────────────────────────────────────────────
 interface ChatMessage {
@@ -139,6 +179,14 @@ interface ChatMessage {
   /** Correlates incremental main-process events with this pending reply. */
   requestId?: string;
   isStreaming?: boolean;
+}
+
+interface SavedConversation {
+  sessionId: string;
+  problem: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ChatMessage[];
 }
 
 // crypto.randomUUID needs a secure context; fall back for safety.
@@ -165,100 +213,555 @@ const ACCENT = '#204A79'; // primary blue
 const ACCENT_BG = '#E9EFFF'; // light blue fill
 const ACCENT_BORDER = '#BCD0FC'; // light blue border
 const BORDER = '#e5e7eb';
-const FONT = "'PT Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const FONT =
+  "'PT Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const S: Record<string, React.CSSProperties> = {
   root: {
-    display: 'flex', flexDirection: 'column', height: '100vh',
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100vh',
     fontFamily: FONT,
-    background: '#ffffff', borderRadius: 14, overflow: 'hidden',
-    boxShadow: '0 8px 32px rgba(0,0,0,0.18)', border: `1px solid ${BORDER}`,
+    background: '#ffffff',
+    borderRadius: 14,
+    overflow: 'hidden',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+    border: `1px solid ${BORDER}`,
     color: '#111827',
   },
   header: {
-    display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
-    background: '#f9fafb', borderBottom: `1px solid ${BORDER}`,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '10px 14px',
+    background: '#f9fafb',
+    borderBottom: `1px solid ${BORDER}`,
     WebkitAppRegion: 'drag', // draggable region for the frameless window
   } as React.CSSProperties,
-  brand: { display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, fontSize: 13, color: '#374151' },
-  statusDot: { width: 8, height: 8, borderRadius: '50%', background: '#22c55e' },
+  brand: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 7,
+    fontWeight: 700,
+    fontSize: 13,
+    color: '#374151',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: '50%',
+    background: '#22c55e',
+  },
   sub: { fontSize: 11, color: '#9ca3af', fontWeight: 400 },
-  headerBtns: { marginLeft: 'auto', display: 'flex', gap: 2, WebkitAppRegion: 'no-drag' } as React.CSSProperties,
+  headerBtns: {
+    marginLeft: 'auto',
+    display: 'flex',
+    gap: 2,
+    WebkitAppRegion: 'no-drag',
+  } as React.CSSProperties,
   iconBtn: {
-    border: 'none', background: 'transparent', cursor: 'pointer',
-    fontSize: 15, color: '#9ca3af', padding: '3px 7px', borderRadius: 7,
+    border: 'none',
+    background: 'transparent',
+    cursor: 'pointer',
+    fontSize: 15,
+    color: '#9ca3af',
+    padding: '3px 7px',
+    borderRadius: 7,
   },
   iconBtnActive: { background: ACCENT_BG, color: ACCENT },
   newSessionBtn: {
-    border: `1px solid ${ACCENT_BORDER}`, background: '#fff', cursor: 'pointer',
-    fontSize: 11.5, color: ACCENT, padding: '3px 8px', borderRadius: 7,
-    fontFamily: FONT, fontWeight: 600,
+    border: `1px solid ${ACCENT_BORDER}`,
+    background: '#fff',
+    cursor: 'pointer',
+    fontSize: 11.5,
+    color: ACCENT,
+    padding: '3px 8px',
+    borderRadius: 7,
+    fontFamily: FONT,
+    fontWeight: 600,
   },
-  problem: { padding: '6px 14px', fontSize: 11, color: '#9ca3af', borderBottom: `1px solid #f3f4f6`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  list: { flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 },
+  historyPanel: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    background: '#fff',
+  },
+  historyPanelHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '12px 14px',
+    borderBottom: `1px solid ${BORDER}`,
+  },
+  historyTitle: { fontSize: 14, fontWeight: 700, color: '#374151' },
+  historyBack: {
+    border: 'none',
+    background: 'transparent',
+    color: ACCENT,
+    cursor: 'pointer',
+    padding: 0,
+    fontSize: 12,
+    fontWeight: 700,
+    fontFamily: FONT,
+  },
+  historyList: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: '8px 10px 12px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  historyItem: {
+    width: '100%',
+    border: `1px solid ${BORDER}`,
+    background: '#fff',
+    borderRadius: 10,
+    padding: '9px 10px',
+    textAlign: 'left',
+    cursor: 'pointer',
+    fontFamily: FONT,
+  },
+  historyItemTitle: {
+    display: 'block',
+    color: '#374151',
+    fontSize: 12.5,
+    fontWeight: 700,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  historyItemMeta: {
+    display: 'block',
+    color: '#9ca3af',
+    fontSize: 10.5,
+    marginTop: 2,
+  },
+  historyItemPreview: {
+    display: 'block',
+    color: '#6b7280',
+    fontSize: 11.5,
+    marginTop: 4,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  reviewBanner: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '7px 14px',
+    background: ACCENT_BG,
+    borderBottom: `1px solid ${ACCENT_BORDER}`,
+    color: ACCENT,
+    fontSize: 11.5,
+  },
+  problem: {
+    padding: '6px 14px',
+    fontSize: 11,
+    color: '#9ca3af',
+    borderBottom: `1px solid #f3f4f6`,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  list: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: 14,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
   userRow: { alignSelf: 'flex-end', maxWidth: '85%' },
-  tutorRow: { alignSelf: 'flex-start', maxWidth: '92%', display: 'flex', gap: 8 },
-  tutorAvatar: { width: 24, height: 24, borderRadius: '50%', background: ACCENT, color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 },
-  userBubble: { background: ACCENT, color: '#fff', padding: '9px 13px', borderRadius: '16px 16px 4px 16px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
-  tutorBubble: { background: '#f3f4f6', color: '#374151', padding: '9px 13px', borderRadius: '4px 16px 16px 16px', fontSize: 13, lineHeight: 1.5 },
-  errBubble: { background: '#fef2f2', color: '#b91c1c', padding: '9px 13px', borderRadius: 12, fontSize: 13, border: '1px solid #fecaca' },
+  tutorRow: {
+    alignSelf: 'flex-start',
+    maxWidth: '92%',
+    display: 'flex',
+    gap: 8,
+  },
+  tutorAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: '50%',
+    background: ACCENT,
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 700,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    marginTop: 2,
+  },
+  userBubble: {
+    background: ACCENT,
+    color: '#fff',
+    padding: '9px 13px',
+    borderRadius: '16px 16px 4px 16px',
+    fontSize: 13,
+    lineHeight: 1.5,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+  },
+  tutorBubble: {
+    background: '#f3f4f6',
+    color: '#374151',
+    padding: '9px 13px',
+    borderRadius: '4px 16px 16px 16px',
+    fontSize: 13,
+    lineHeight: 1.5,
+  },
+  errBubble: {
+    background: '#fef2f2',
+    color: '#b91c1c',
+    padding: '9px 13px',
+    borderRadius: 12,
+    fontSize: 13,
+    border: '1px solid #fecaca',
+  },
   thumbRow: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  thumb: { width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: `1px solid ${BORDER}` },
-  example: { marginTop: 8, background: ACCENT_BG, border: `1px solid ${ACCENT_BORDER}`, borderRadius: 10, padding: '8px 10px', fontSize: 12, color: ACCENT },
-  exampleBtn: { marginTop: 6, border: `1px solid ${ACCENT_BORDER}`, background: '#fff', borderRadius: 8, padding: '3px 9px', fontSize: 11, cursor: 'pointer', color: ACCENT },
-  viz: { marginTop: 8, width: '100%', height: 280, border: `1px solid ${BORDER}`, borderRadius: 10, background: '#fff' },
-  composer: { borderTop: `1px solid ${BORDER}`, padding: 10, background: '#fff' },
-  pendingContext: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '6px 8px', border: `1px solid ${ACCENT_BORDER}`, borderRadius: 8, background: ACCENT_BG, color: ACCENT, fontSize: 11.5 },
-  pendingContextText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  pendingContextX: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: '0 2px', fontFamily: FONT, fontSize: 14, lineHeight: 1 },
+  thumb: {
+    width: 64,
+    height: 64,
+    objectFit: 'cover',
+    borderRadius: 8,
+    border: `1px solid ${BORDER}`,
+  },
+  example: {
+    marginTop: 8,
+    background: ACCENT_BG,
+    border: `1px solid ${ACCENT_BORDER}`,
+    borderRadius: 10,
+    padding: '8px 10px',
+    fontSize: 12,
+    color: ACCENT,
+  },
+  exampleBtn: {
+    marginTop: 6,
+    border: `1px solid ${ACCENT_BORDER}`,
+    background: '#fff',
+    borderRadius: 8,
+    padding: '3px 9px',
+    fontSize: 11,
+    cursor: 'pointer',
+    color: ACCENT,
+  },
+  viz: {
+    marginTop: 8,
+    width: '100%',
+    height: 280,
+    border: `1px solid ${BORDER}`,
+    borderRadius: 10,
+    background: '#fff',
+  },
+  composer: {
+    borderTop: `1px solid ${BORDER}`,
+    padding: 10,
+    background: '#fff',
+  },
+  pendingContext: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+    padding: '6px 8px',
+    border: `1px solid ${ACCENT_BORDER}`,
+    borderRadius: 8,
+    background: ACCENT_BG,
+    color: ACCENT,
+    fontSize: 11.5,
+  },
+  pendingContextText: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  pendingContextX: {
+    border: 'none',
+    background: 'transparent',
+    color: ACCENT,
+    cursor: 'pointer',
+    padding: '0 2px',
+    fontFamily: FONT,
+    fontSize: 14,
+    lineHeight: 1,
+  },
   pending: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
   pendingThumbWrap: { position: 'relative' },
-  pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#374151', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
+  pendingX: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 16,
+    height: 16,
+    borderRadius: '50%',
+    background: '#374151',
+    color: '#fff',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: 10,
+    lineHeight: '16px',
+    padding: 0,
+  },
   inputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
-  textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
-  sendBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT },
+  textarea: {
+    flex: 1,
+    resize: 'none',
+    border: `1px solid ${BORDER}`,
+    borderRadius: 12,
+    padding: '9px 11px',
+    fontSize: 13,
+    fontFamily: FONT,
+    maxHeight: 120,
+    outline: 'none',
+    color: '#111827',
+  },
+  sendBtn: {
+    border: 'none',
+    background: ACCENT,
+    color: '#fff',
+    borderRadius: 12,
+    padding: '9px 15px',
+    fontSize: 13,
+    cursor: 'pointer',
+    fontWeight: 700,
+    fontFamily: FONT,
+  },
   sendBtnDisabled: { opacity: 0.4, cursor: 'default' },
-  hotkeyHint: { marginTop: 6, fontSize: 11, color: '#9ca3af', fontFamily: FONT, textAlign: 'center' },
-  hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
+  hotkeyHint: {
+    marginTop: 6,
+    fontSize: 11,
+    color: '#9ca3af',
+    fontFamily: FONT,
+    textAlign: 'center',
+  },
+  hotkeyKbd: {
+    fontFamily: FONT,
+    fontWeight: 600,
+    color: '#6b7280',
+    background: '#f3f4f6',
+    border: `1px solid ${BORDER}`,
+    borderRadius: 5,
+    padding: '1px 5px',
+    fontSize: 10.5,
+  },
   feedbackRow: { display: 'flex', gap: 2, marginTop: 4 },
-  metricRow: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, color: '#6b7280', fontSize: 10.5 },
-  metricChip: { border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 6, padding: '1px 5px', lineHeight: 1.35 },
-  toolStack: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 7 },
-  toolCard: { border: `1px solid ${ACCENT_BORDER}`, background: '#f8faff', borderRadius: 10, padding: '7px 9px', color: '#4b5563', fontSize: 11.5, lineHeight: 1.4 },
-  toolHeader: { display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: ACCENT },
-  toolIcon: { width: 18, height: 18, borderRadius: 5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: ACCENT_BG, fontSize: 11 },
-  toolStatus: { marginLeft: 'auto', color: '#16a34a', fontWeight: 600, fontSize: 10.5 },
+  metricRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginTop: 5,
+    color: '#6b7280',
+    fontSize: 10.5,
+  },
+  metricChip: {
+    border: `1px solid ${BORDER}`,
+    background: '#fff',
+    borderRadius: 6,
+    padding: '1px 5px',
+    lineHeight: 1.35,
+  },
+  toolStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    marginBottom: 7,
+  },
+  toolCard: {
+    border: `1px solid ${ACCENT_BORDER}`,
+    background: '#f8faff',
+    borderRadius: 10,
+    padding: '7px 9px',
+    color: '#4b5563',
+    fontSize: 11.5,
+    lineHeight: 1.4,
+  },
+  toolHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    fontWeight: 700,
+    color: ACCENT,
+  },
+  toolIcon: {
+    width: 18,
+    height: 18,
+    borderRadius: 5,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: ACCENT_BG,
+    fontSize: 11,
+  },
+  toolStatus: {
+    marginLeft: 'auto',
+    color: '#16a34a',
+    fontWeight: 600,
+    fontSize: 10.5,
+  },
   toolStatusError: { color: '#b91c1c' },
   toolArgs: { marginTop: 3, color: '#6b7280' },
   toolDetails: { marginTop: 5 },
-  toolObservation: { borderTop: `1px solid ${BORDER}`, marginTop: 5, paddingTop: 5 },
-  feedbackBtn: { border: '1px solid transparent', background: 'transparent', borderRadius: 6, padding: '0 5px', fontSize: 12, lineHeight: '20px', cursor: 'pointer', opacity: 0.45 },
-  feedbackBtnRated: { opacity: 1, background: ACCENT_BG, borderColor: ACCENT_BORDER, cursor: 'default' },
+  toolObservation: {
+    borderTop: `1px solid ${BORDER}`,
+    marginTop: 5,
+    paddingTop: 5,
+  },
+  feedbackBtn: {
+    border: '1px solid transparent',
+    background: 'transparent',
+    borderRadius: 6,
+    padding: '0 5px',
+    fontSize: 12,
+    lineHeight: '20px',
+    cursor: 'pointer',
+    opacity: 0.45,
+  },
+  feedbackBtnRated: {
+    opacity: 1,
+    background: ACCENT_BG,
+    borderColor: ACCENT_BORDER,
+    cursor: 'default',
+  },
   feedbackBtnLocked: { opacity: 0.25, cursor: 'default' },
-  typing: { alignSelf: 'flex-start', color: '#9ca3af', fontSize: 12, fontStyle: 'italic', paddingLeft: 32 },
-  empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
+  typing: {
+    alignSelf: 'flex-start',
+    color: '#9ca3af',
+    fontSize: 12,
+    fontStyle: 'italic',
+    paddingLeft: 32,
+  },
+  empty: {
+    margin: 'auto',
+    textAlign: 'center',
+    color: '#9ca3af',
+    fontSize: 12.5,
+    lineHeight: 1.6,
+    padding: 24,
+  },
   // Settings panel (mirrors the onboarding toolkit step)
-  settings: { borderBottom: `1px solid ${BORDER}`, background: '#ffffff', padding: '14px', maxHeight: 360, overflowY: 'auto' },
-  toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
-  toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
-  toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
-  groupLabel: { fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: ACCENT, marginBottom: 6 },
+  settings: {
+    borderBottom: `1px solid ${BORDER}`,
+    background: '#ffffff',
+    padding: '14px',
+    maxHeight: 360,
+    overflowY: 'auto',
+  },
+  toggleRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 9,
+    cursor: 'pointer',
+    marginBottom: 14,
+  },
+  toggleTitle: {
+    display: 'block',
+    fontSize: 13,
+    color: '#374151',
+    marginBottom: 2,
+  },
+  toggleHelp: {
+    display: 'block',
+    fontSize: 11.5,
+    lineHeight: 1.4,
+    color: '#9ca3af',
+  },
+  groupLabel: {
+    fontSize: 12,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: ACCENT,
+    marginBottom: 6,
+  },
   chips: { display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 14 },
-  chip: { fontSize: 13, fontWeight: 500, padding: '6px 14px', borderRadius: 999, background: '#fff', border: '1.5px solid #d1d5db', color: '#4b5563', cursor: 'pointer', fontFamily: FONT },
+  chip: {
+    fontSize: 13,
+    fontWeight: 500,
+    padding: '6px 14px',
+    borderRadius: 999,
+    background: '#fff',
+    border: '1.5px solid #d1d5db',
+    color: '#4b5563',
+    cursor: 'pointer',
+    fontFamily: FONT,
+  },
   chipOn: { background: ACCENT, borderColor: ACCENT, color: '#fff' },
   chipDashed: { borderStyle: 'dashed', color: '#9ca3af' },
   chipEmpty: { fontSize: 12, color: '#9ca3af', fontStyle: 'italic' },
-  customForm: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: -6, marginBottom: 14 },
-  customInput: { width: '100%', border: '1.5px solid #d1d5db', borderRadius: 8, padding: '7px 11px', fontSize: 13, color: '#374151', outline: 'none', fontFamily: FONT, boxSizing: 'border-box' },
-  memoryArea: { width: '100%', minHeight: 96, resize: 'vertical', border: '1.5px solid #d1d5db', borderRadius: 8, padding: '8px 11px', fontSize: 13, lineHeight: 1.5, color: '#374151', outline: 'none', fontFamily: FONT, boxSizing: 'border-box', marginBottom: 8 },
+  customForm: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+    marginTop: -6,
+    marginBottom: 14,
+  },
+  customInput: {
+    width: '100%',
+    border: '1.5px solid #d1d5db',
+    borderRadius: 8,
+    padding: '7px 11px',
+    fontSize: 13,
+    color: '#374151',
+    outline: 'none',
+    fontFamily: FONT,
+    boxSizing: 'border-box',
+  },
+  memoryArea: {
+    width: '100%',
+    minHeight: 96,
+    resize: 'vertical',
+    border: '1.5px solid #d1d5db',
+    borderRadius: 8,
+    padding: '8px 11px',
+    fontSize: 13,
+    lineHeight: 1.5,
+    color: '#374151',
+    outline: 'none',
+    fontFamily: FONT,
+    boxSizing: 'border-box',
+    marginBottom: 8,
+  },
   sectionDivider: { height: 1, background: '#f3f4f6', margin: '4px 0 14px' },
-  helpText: { fontSize: 11.5, color: '#9ca3af', lineHeight: 1.5, marginBottom: 8 },
-  addBtn: { alignSelf: 'flex-start', border: 'none', background: ACCENT, color: '#fff', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
+  helpText: {
+    fontSize: 11.5,
+    color: '#9ca3af',
+    lineHeight: 1.5,
+    marginBottom: 8,
+  },
+  addBtn: {
+    alignSelf: 'flex-start',
+    border: 'none',
+    background: ACCENT,
+    color: '#fff',
+    borderRadius: 8,
+    padding: '5px 12px',
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontFamily: FONT,
+  },
   saveRow: { display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 },
-  saveBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 999, padding: '7px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
+  saveBtn: {
+    border: 'none',
+    background: ACCENT,
+    color: '#fff',
+    borderRadius: 999,
+    padding: '7px 18px',
+    fontSize: 13,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontFamily: FONT,
+  },
   saved: { fontSize: 12, color: '#16a34a', fontWeight: 700 },
 };
 
-const CHATBOTS = Object.values(AI_TOOLS).filter((t) => t.category === 'chatbot');
+const CHATBOTS = Object.values(AI_TOOLS).filter(
+  (t) => t.category === 'chatbot',
+);
 const AGENTS = Object.values(AI_TOOLS).filter((t) => t.category === 'agent');
 const MODE_OPTIONS = [
   { id: 'everyday_support', label: 'Everyday Support' },
@@ -280,17 +783,26 @@ function TutorMessage({ text }: { text: string }) {
       </div>
       {g.vizCode && (
         // eslint-disable-next-line react/no-danger-with-children
-        <iframe title="visualization" style={S.viz} sandbox="allow-scripts" srcDoc={g.vizCode} />
+        <iframe
+          title="visualization"
+          style={S.viz}
+          sandbox="allow-scripts"
+          srcDoc={g.vizCode}
+        />
       )}
       {g.examplePrompt && (
         <div style={S.example}>
-          <div style={{ fontWeight: 600, marginBottom: 2, color: '#3355cc' }}>Try this prompt</div>
+          <div style={{ fontWeight: 600, marginBottom: 2, color: '#3355cc' }}>
+            Try this prompt
+          </div>
           {g.examplePrompt}
           <div>
             <button
               type="button"
               style={S.exampleBtn}
-              onClick={() => navigator.clipboard.writeText(g.examplePrompt || '')}
+              onClick={() =>
+                navigator.clipboard.writeText(g.examplePrompt || '')
+              }
             >
               Copy prompt
             </button>
@@ -345,9 +857,8 @@ export function ToolCallCard({ call }: { call: TutorToolCall }) {
   const end = call.arguments?.end_hh_mm_ago;
   const results = call.result?.results ?? [];
   const count = call.result?.count ?? results.length;
-  const windowLabel = start || end
-    ? `${start ?? 'any'} → ${end ?? 'now'} ago`
-    : 'most recent';
+  const windowLabel =
+    start || end ? `${start ?? 'any'} → ${end ?? 'now'} ago` : 'most recent';
 
   return (
     <div style={S.toolCard}>
@@ -369,14 +880,18 @@ export function ToolCallCard({ call }: { call: TutorToolCall }) {
       </div>
       <div style={S.toolArgs}>
         {query ? `“${query}”` : 'Recent memory'} · {windowLabel} · limit{' '}
-        {call.arguments?.limit ?? 3} · evidence {call.arguments?.evidence_limit ?? 1}
+        {call.arguments?.limit ?? 3} · evidence{' '}
+        {call.arguments?.evidence_limit ?? 1}
       </div>
       {call.result?.error && <div style={S.toolArgs}>{call.result.error}</div>}
       {results.length > 0 && (
         <details style={S.toolDetails}>
           <summary>View retrieved memory</summary>
           {results.map((result, index) => (
-            <div key={result.id ?? `${call.id}-${index}`} style={S.toolObservation}>
+            <div
+              key={result.id ?? `${call.id}-${index}`}
+              style={S.toolObservation}
+            >
               {result.updated_at && (
                 <div style={{ color: '#9ca3af', fontSize: 10.5 }}>
                   {new Date(result.updated_at).toLocaleString()}
@@ -427,8 +942,9 @@ function ChatMetrics({
   return (
     <div style={S.metricRow}>
       <span style={S.metricChip}>
-        {formatMetricTokens(inputTokens)} in / {formatMetricTokens(outputTokens)}{' '}
-        out / {formatMetricLatency(durationMs)}
+        {formatMetricTokens(inputTokens)} in /{' '}
+        {formatMetricTokens(outputTokens)} out /{' '}
+        {formatMetricLatency(durationMs)}
       </span>
     </div>
   );
@@ -438,12 +954,19 @@ export default function SessionChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<string[]>([]);
-  const [pendingContextLabel, setPendingContextLabel] = useState<string | null>(null);
+  const [pendingContextLabel, setPendingContextLabel] = useState<string | null>(
+    null,
+  );
   const [sending, setSending] = useState(false);
   const [startingNewSession, setStartingNewSession] = useState(false);
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
+  const [conversations, setConversations] = useState<SavedConversation[]>([]);
+  const [reviewing, setReviewing] = useState<SavedConversation | null>(null);
   const [profile, setProfile] = useState<{
     scenario: string;
     aiTools: string[];
@@ -475,6 +998,24 @@ export default function SessionChatView() {
   const listRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   const pendingContextRef = useRef<string | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const problemRef = useRef('');
+
+  useEffect(() => {
+    messagesRef.current = messages;
+    problemRef.current = problem;
+    if (!sessionIdRef.current || messages.length === 0) return undefined;
+    const timeout = window.setTimeout(() => {
+      window.electron?.ipcRenderer
+        .invoke('save-chat-conversation', {
+          sessionId: sessionIdRef.current,
+          problem,
+          messages,
+        })
+        .catch(() => {});
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [messages, problem]);
 
   // Rate a tutor message. Routed main → sensing /feedback → feedback.jsonl,
   // same pipeline as the bubble reactions.
@@ -493,78 +1034,90 @@ export default function SessionChatView() {
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
-      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+      if (listRef.current)
+        listRef.current.scrollTop = listRef.current.scrollHeight;
     });
   }, []);
 
   // Main relays SSE events from the tutor service. Keep one pending tutor
   // message and update it in place so text and tool activity appear in order.
   useEffect(() => {
-    const cleanup = window.electron?.ipcRenderer.on('chat-stream-event', (data: any) => {
-      const event = (data ?? {}) as {
-        requestId?: string;
-        type?: string;
-        text?: string;
-        call?: TutorToolCall;
-        guidance?: string;
-        error?: string;
-        observerMetrics?: LLMCallMetrics | null;
-        llm_metrics?: LLMCallMetrics | null;
-        tool_calls?: TutorToolCall[];
-      };
-      if (!event.requestId) return;
-      setMessages((current) =>
-        current.map((message) => {
-          if (message.requestId !== event.requestId) return message;
-          if (event.type === 'text_delta') {
-            return { ...message, text: message.text + (event.text ?? '') };
-          }
-          if (event.type === 'tool_call_started' && event.call) {
-            return {
-              ...message,
-              toolCalls: [
-                ...(message.toolCalls ?? []).filter((call) => call.id !== event.call?.id),
-                event.call,
-              ],
-            };
-          }
-          if (event.type === 'tool_call_completed' && event.call) {
-            return {
-              ...message,
-              toolCalls: (message.toolCalls ?? []).some((call) => call.id === event.call?.id)
-                ? (message.toolCalls ?? []).map((call) =>
-                    call.id === event.call?.id ? event.call as TutorToolCall : call,
-                  )
-                : [...(message.toolCalls ?? []), event.call],
-            };
-          }
-          if (event.type === 'done') {
-            return {
-              ...message,
-              text: event.guidance ?? message.text,
-              id: message.id ?? makeMessageId(),
-              ts: Date.now(),
-              observerMetrics: event.observerMetrics ?? null,
-              tutorMetrics: event.llm_metrics ?? null,
-              toolCalls: event.tool_calls ?? message.toolCalls ?? [],
-              isStreaming: false,
-            };
-          }
-          if (event.type === 'error') {
-            return {
-              ...message,
-              text: event.error ?? 'The tutor could not generate a response.',
-              isError: true,
-              isStreaming: false,
-            };
-          }
-          return message;
-        }),
-      );
-      if (event.type === 'done' || event.type === 'error') setSending(false);
-      scrollToBottom();
-    });
-    return () => { if (typeof cleanup === 'function') cleanup(); };
+    const cleanup = window.electron?.ipcRenderer.on(
+      'chat-stream-event',
+      (data: any) => {
+        const event = (data ?? {}) as {
+          requestId?: string;
+          type?: string;
+          text?: string;
+          call?: TutorToolCall;
+          guidance?: string;
+          error?: string;
+          observerMetrics?: LLMCallMetrics | null;
+          llm_metrics?: LLMCallMetrics | null;
+          tool_calls?: TutorToolCall[];
+        };
+        if (!event.requestId) return;
+        setMessages((current) =>
+          current.map((message) => {
+            if (message.requestId !== event.requestId) return message;
+            if (event.type === 'text_delta') {
+              return { ...message, text: message.text + (event.text ?? '') };
+            }
+            if (event.type === 'tool_call_started' && event.call) {
+              return {
+                ...message,
+                toolCalls: [
+                  ...(message.toolCalls ?? []).filter(
+                    (call) => call.id !== event.call?.id,
+                  ),
+                  event.call,
+                ],
+              };
+            }
+            if (event.type === 'tool_call_completed' && event.call) {
+              return {
+                ...message,
+                toolCalls: (message.toolCalls ?? []).some(
+                  (call) => call.id === event.call?.id,
+                )
+                  ? (message.toolCalls ?? []).map((call) =>
+                      call.id === event.call?.id
+                        ? (event.call as TutorToolCall)
+                        : call,
+                    )
+                  : [...(message.toolCalls ?? []), event.call],
+              };
+            }
+            if (event.type === 'done') {
+              return {
+                ...message,
+                text: event.guidance ?? message.text,
+                id: message.id ?? makeMessageId(),
+                ts: Date.now(),
+                observerMetrics: event.observerMetrics ?? null,
+                tutorMetrics: event.llm_metrics ?? null,
+                toolCalls: event.tool_calls ?? message.toolCalls ?? [],
+                isStreaming: false,
+              };
+            }
+            if (event.type === 'error') {
+              return {
+                ...message,
+                text: event.error ?? 'The tutor could not generate a response.',
+                isError: true,
+                isStreaming: false,
+              };
+            }
+            return message;
+          }),
+        );
+        if (event.type === 'done' || event.type === 'error') setSending(false);
+        scrollToBottom();
+      },
+    );
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
   }, [scrollToBottom]);
 
   // Core send: append the user turn and an empty tutor turn immediately. The
@@ -593,19 +1146,24 @@ export default function SessionChatView() {
       setPendingContextLabel(null);
       setSending(true);
       scrollToBottom();
-      const res = await window.electron?.ipcRenderer.invoke('send-chat-message', {
-        requestId,
-        userText,
-        images,
-      });
-      const r = res as {
-        streamed?: boolean;
-        guidance?: string;
-        error?: string;
-        observerMetrics?: LLMCallMetrics | null;
-        tutorMetrics?: LLMCallMetrics | null;
-        toolCalls?: TutorToolCall[];
-      } | undefined;
+      const res = await window.electron?.ipcRenderer.invoke(
+        'send-chat-message',
+        {
+          requestId,
+          userText,
+          images,
+        },
+      );
+      const r = res as
+        | {
+            streamed?: boolean;
+            guidance?: string;
+            error?: string;
+            observerMetrics?: LLMCallMetrics | null;
+            tutorMetrics?: LLMCallMetrics | null;
+            toolCalls?: TutorToolCall[];
+          }
+        | undefined;
       // Compatibility with older main processes and a fallback if IPC fails
       // before a stream event can be delivered.
       if (!r?.streamed && (r?.guidance !== undefined || r?.error)) {
@@ -635,24 +1193,40 @@ export default function SessionChatView() {
 
   // Session context from main. A new sessionId resets the conversation.
   useEffect(() => {
-    const cleanup = window.electron?.ipcRenderer.on('session-init', (data: any) => {
-      const { sessionId, problemStatement } = (data ?? {}) as {
-        sessionId?: string;
-        problemStatement?: string;
-      };
-      if (sessionId && sessionId !== sessionIdRef.current) {
-        sessionIdRef.current = sessionId;
-        setMessages([]);
-        setRatings({});
-        setInput('');
-        setPendingImages([]);
-        setSending(false);
-        pendingContextRef.current = null;
-        setPendingContextLabel(null);
-      }
-      setProblem(problemStatement ?? '');
-    });
-    return () => { if (typeof cleanup === 'function') cleanup(); };
+    const cleanup = window.electron?.ipcRenderer.on(
+      'session-init',
+      (data: any) => {
+        const { sessionId, problemStatement } = (data ?? {}) as {
+          sessionId?: string;
+          problemStatement?: string;
+        };
+        if (sessionId && sessionId !== sessionIdRef.current) {
+          if (sessionIdRef.current && messagesRef.current.length > 0) {
+            window.electron?.ipcRenderer
+              .invoke('save-chat-conversation', {
+                sessionId: sessionIdRef.current,
+                problem: problemRef.current,
+                messages: messagesRef.current,
+              })
+              .catch(() => {});
+          }
+          sessionIdRef.current = sessionId;
+          setMessages([]);
+          setRatings({});
+          setInput('');
+          setPendingImages([]);
+          setSending(false);
+          pendingContextRef.current = null;
+          setPendingContextLabel(null);
+        }
+        setProblem(problemStatement ?? '');
+        setReviewing(null);
+        setShowHistory(false);
+      },
+    );
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
   }, []);
 
   // Load the user's onboarding profile (mode + AI tools) for the Settings panel.
@@ -662,7 +1236,10 @@ export default function SessionChatView() {
       .then((p: any) => {
         if (!p) return;
         const next = {
-          scenario: typeof p.tutorScenario === 'string' ? p.tutorScenario : 'everyday_support',
+          scenario:
+            typeof p.tutorScenario === 'string'
+              ? p.tutorScenario
+              : 'everyday_support',
           aiTools: Array.isArray(p.aiTools) ? p.aiTools : [],
           hideAvatar: p.hideAvatar === true,
         };
@@ -675,11 +1252,16 @@ export default function SessionChatView() {
   }, []);
 
   const toggleEditTool = (id: string) =>
-    setEditTools((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
+    setEditTools((prev) =>
+      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
+    );
 
   const addCustomChatbot = () => {
     if (!cbName.trim() || !cbUrl.trim()) return;
-    setEditTools((prev) => [...prev, encodeCustomChatbot(cbName, cbUrl, cbDesc)]);
+    setEditTools((prev) => [
+      ...prev,
+      encodeCustomChatbot(cbName, cbUrl, cbDesc),
+    ]);
     setCbName('');
     setCbUrl('');
     setCbDesc('');
@@ -736,7 +1318,9 @@ export default function SessionChatView() {
   }, [showSettings]);
 
   const saveMemory = async () => {
-    const res = await window.electron?.ipcRenderer.invoke('save-memory', { memory: memoryDraft });
+    const res = await window.electron?.ipcRenderer.invoke('save-memory', {
+      memory: memoryDraft,
+    });
     if ((res as { success?: boolean })?.success) {
       setMemoryLoaded(memoryDraft);
       setMemoryFlash(true);
@@ -749,35 +1333,48 @@ export default function SessionChatView() {
   // sent immediately; "Chat about it" only stages the context for the user's
   // next message and therefore does not invoke the tutor yet.
   useEffect(() => {
-    const cleanup = window.electron?.ipcRenderer.on('help-request', (data: any) => {
-      const { rawObservation, phrase, label, deferUntilUserMessage } = (data ?? {}) as {
-        rawObservation?: string;
-        phrase?: string;
-        label?: string;
-        deferUntilUserMessage?: boolean;
-      };
-      const seed = (rawObservation || phrase || '').trim();
-      if (seed && deferUntilUserMessage) {
-        pendingContextRef.current = seed;
-        setPendingContextLabel((phrase || label || 'Tutor suggestion').trim());
-        return;
-      }
-      if (seed) sendMessage(seed, []);
-    });
-    return () => { if (typeof cleanup === 'function') cleanup(); };
+    const cleanup = window.electron?.ipcRenderer.on(
+      'help-request',
+      (data: any) => {
+        const { rawObservation, phrase, label, deferUntilUserMessage } =
+          (data ?? {}) as {
+            rawObservation?: string;
+            phrase?: string;
+            label?: string;
+            deferUntilUserMessage?: boolean;
+          };
+        const seed = (rawObservation || phrase || '').trim();
+        if (seed && deferUntilUserMessage) {
+          pendingContextRef.current = seed;
+          setPendingContextLabel(
+            (phrase || label || 'Tutor suggestion').trim(),
+          );
+          return;
+        }
+        if (seed) sendMessage(seed, []);
+      },
+    );
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
   }, [sendMessage]);
 
   // Hot-key screen capture (Cmd/Ctrl+Shift+Space) → preview thumbnail in the
   // input bar, reusing the same pending-image strip that paste drives.
   useEffect(() => {
-    const cleanup = window.electron?.ipcRenderer.on('hotkey-capture', (data: any) => {
-      const url = (data ?? {}).imageDataUrl as string | undefined;
-      if (url) setPendingImages((prev) => [...prev, url]);
-    });
+    const cleanup = window.electron?.ipcRenderer.on(
+      'hotkey-capture',
+      (data: any) => {
+        const url = (data ?? {}).imageDataUrl as string | undefined;
+        if (url) setPendingImages((prev) => [...prev, url]);
+      },
+    );
     // Tell main the listener is live so it can flush any capture that arrived
     // while this window was still loading (e.g. the hot key just opened it).
     window.electron?.ipcRenderer.sendMessage('hotkey-capture-ready');
-    return () => { if (typeof cleanup === 'function') cleanup(); };
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
   }, []);
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -789,7 +1386,8 @@ export default function SessionChatView() {
         const file = it.getAsFile();
         if (!file) continue;
         const reader = new FileReader();
-        reader.onload = () => setPendingImages((prev) => [...prev, String(reader.result)]);
+        reader.onload = () =>
+          setPendingImages((prev) => [...prev, String(reader.result)]);
         reader.readAsDataURL(file);
       }
     }
@@ -801,6 +1399,36 @@ export default function SessionChatView() {
     const text = input;
     setInput('');
     setPendingImages([]);
+    if (reviewing) {
+      const conversation = reviewing;
+      setSending(true);
+      window.electron?.ipcRenderer
+        .invoke('resume-chat-conversation', {
+          sessionId: conversation.sessionId,
+        })
+        .then((result: any) => {
+          if (!result?.success) {
+            setSending(false);
+            setInput(text);
+            setPendingImages(imgs);
+            return;
+          }
+          sessionIdRef.current = conversation.sessionId;
+          setProblem(conversation.problem);
+          setMessages(conversation.messages);
+          setRatings({});
+          setReviewing(null);
+          setShowHistory(false);
+          setSending(false);
+          sendMessage(text, imgs);
+        })
+        .catch(() => {
+          setSending(false);
+          setInput(text);
+          setPendingImages(imgs);
+        });
+      return;
+    }
     sendMessage(text, imgs);
   };
 
@@ -815,6 +1443,54 @@ export default function SessionChatView() {
       setStartingNewSession(false);
     }
   };
+
+  const openHistory = async () => {
+    setShowSettings(false);
+    setReviewing(null);
+    setShowHistory(true);
+    setHistoryLoading(true);
+    setHistoryError(false);
+    try {
+      const result = await window.electron?.ipcRenderer.invoke(
+        'get-chat-conversations',
+      );
+      const saved = Array.isArray(result)
+        ? (result as SavedConversation[])
+        : [];
+      setConversations(
+        saved.filter(
+          (conversation) => conversation.sessionId !== sessionIdRef.current,
+        ),
+      );
+    } catch {
+      setConversations([]);
+      setHistoryError(true);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const conversationTitle = (conversation: SavedConversation): string =>
+    conversation.problem.trim() ||
+    conversation.messages
+      .find((message) => message.role === 'user')
+      ?.text.trim() ||
+    'Untitled conversation';
+
+  const conversationPreview = (conversation: SavedConversation): string =>
+    conversation.messages.find((message) => message.text.trim())?.text.trim() ||
+    'No text messages';
+
+  const formatConversationDate = (timestamp: number): string =>
+    new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      ...(new Date(timestamp).getFullYear() !== new Date().getFullYear()
+        ? { year: 'numeric' }
+        : {}),
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(timestamp));
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -837,7 +1513,8 @@ export default function SessionChatView() {
     <div style={S.root}>
       <div style={S.header}>
         <span style={S.brand}>
-          <span style={S.statusDot} /> Coco <span style={S.sub}>· Session active</span>
+          <span style={S.statusDot} /> Coco{' '}
+          <span style={S.sub}>· Session active</span>
         </span>
         <div style={S.headerBtns}>
           <button
@@ -855,9 +1532,25 @@ export default function SessionChatView() {
           </button>
           <button
             type="button"
+            style={{
+              ...S.iconBtn,
+              ...(showHistory || reviewing ? S.iconBtnActive : {}),
+            }}
+            title="Review past conversations"
+            aria-label="Review past conversations"
+            onClick={openHistory}
+          >
+            ◷
+          </button>
+          <button
+            type="button"
             style={{ ...S.iconBtn, ...(showSettings ? S.iconBtnActive : {}) }}
             title="Settings"
-            onClick={() => setShowSettings((v) => !v)}
+            onClick={() => {
+              setShowHistory(false);
+              setReviewing(null);
+              setShowSettings((v) => !v);
+            }}
           >
             ⚙
           </button>
@@ -872,7 +1565,12 @@ export default function SessionChatView() {
           >
             {expanded ? '⇥' : '⇤'}
           </button>
-          <button type="button" style={S.iconBtn} title="Close" onClick={() => window.close()}>
+          <button
+            type="button"
+            style={S.iconBtn}
+            title="Close"
+            onClick={() => window.close()}
+          >
             ×
           </button>
         </div>
@@ -905,7 +1603,10 @@ export default function SessionChatView() {
               <button
                 key={m.id}
                 type="button"
-                style={{ ...S.chip, ...(editScenario === m.id ? S.chipOn : {}) }}
+                style={{
+                  ...S.chip,
+                  ...(editScenario === m.id ? S.chipOn : {}),
+                }}
                 onClick={() => setEditScenario(m.id)}
               >
                 {m.label}
@@ -919,7 +1620,10 @@ export default function SessionChatView() {
               <button
                 key={t.id}
                 type="button"
-                style={{ ...S.chip, ...(editTools.includes(t.id) ? S.chipOn : {}) }}
+                style={{
+                  ...S.chip,
+                  ...(editTools.includes(t.id) ? S.chipOn : {}),
+                }}
                 onClick={() => toggleEditTool(t.id)}
               >
                 {t.label}
@@ -949,10 +1653,27 @@ export default function SessionChatView() {
           </div>
           {showAddChatbot && (
             <div style={S.customForm}>
-              <input style={S.customInput} placeholder="Name — e.g. DeepSeek" value={cbName} onChange={(e) => setCbName(e.target.value)} />
-              <input style={S.customInput} placeholder="Website URL — e.g. https://chat.deepseek.com/" value={cbUrl} onChange={(e) => setCbUrl(e.target.value)} />
-              <input style={S.customInput} placeholder="Description (optional) — what it's good at" value={cbDesc} onChange={(e) => setCbDesc(e.target.value)} />
-              <button type="button" style={S.addBtn} onClick={addCustomChatbot}>Add chatbot</button>
+              <input
+                style={S.customInput}
+                placeholder="Name — e.g. DeepSeek"
+                value={cbName}
+                onChange={(e) => setCbName(e.target.value)}
+              />
+              <input
+                style={S.customInput}
+                placeholder="Website URL — e.g. https://chat.deepseek.com/"
+                value={cbUrl}
+                onChange={(e) => setCbUrl(e.target.value)}
+              />
+              <input
+                style={S.customInput}
+                placeholder="Description (optional) — what it's good at"
+                value={cbDesc}
+                onChange={(e) => setCbDesc(e.target.value)}
+              />
+              <button type="button" style={S.addBtn} onClick={addCustomChatbot}>
+                Add chatbot
+              </button>
             </div>
           )}
 
@@ -962,7 +1683,10 @@ export default function SessionChatView() {
               <button
                 key={t.id}
                 type="button"
-                style={{ ...S.chip, ...(editTools.includes(t.id) ? S.chipOn : {}) }}
+                style={{
+                  ...S.chip,
+                  ...(editTools.includes(t.id) ? S.chipOn : {}),
+                }}
                 onClick={() => toggleEditTool(t.id)}
               >
                 {t.label}
@@ -991,9 +1715,21 @@ export default function SessionChatView() {
           </div>
           {showAddAgent && (
             <div style={S.customForm}>
-              <input style={S.customInput} placeholder="Name — e.g. internal automation tool" value={agName} onChange={(e) => setAgName(e.target.value)} />
-              <input style={S.customInput} placeholder="Description (optional) — what it does" value={agDesc} onChange={(e) => setAgDesc(e.target.value)} />
-              <button type="button" style={S.addBtn} onClick={addCustomAgent}>Add agent</button>
+              <input
+                style={S.customInput}
+                placeholder="Name — e.g. internal automation tool"
+                value={agName}
+                onChange={(e) => setAgName(e.target.value)}
+              />
+              <input
+                style={S.customInput}
+                placeholder="Description (optional) — what it does"
+                value={agDesc}
+                onChange={(e) => setAgDesc(e.target.value)}
+              />
+              <button type="button" style={S.addBtn} onClick={addCustomAgent}>
+                Add agent
+              </button>
             </div>
           )}
 
@@ -1026,7 +1762,10 @@ export default function SessionChatView() {
           <div style={S.saveRow}>
             <button
               type="button"
-              style={{ ...S.saveBtn, ...(memoryDirty ? {} : S.sendBtnDisabled) }}
+              style={{
+                ...S.saveBtn,
+                ...(memoryDirty ? {} : S.sendBtnDisabled),
+              }}
               onClick={saveMemory}
               disabled={!memoryDirty}
             >
@@ -1037,147 +1776,227 @@ export default function SessionChatView() {
         </div>
       )}
 
-      {problem && <div style={S.problem}>Task: {problem}</div>}
+      {(!showHistory || reviewing) && (reviewing?.problem || problem) && (
+        <div style={S.problem}>Task: {reviewing?.problem || problem}</div>
+      )}
 
-      <div style={S.list} ref={listRef}>
-        {messages.length === 0 && !sending && (
-          <div style={S.empty}>
-            Ask Coco about your task, an AI tool, or anything else.
-            <br />
-            You can paste a screenshot to show what you&apos;re working on.
-          </div>
-        )}
-        {messages.map((m, i) => (
-          // eslint-disable-next-line react/no-array-index-key
-          <div key={i} style={m.role === 'user' ? S.userRow : S.tutorRow}>
-            {m.role === 'user' ? (
-              <div style={S.userBubble}>
-                {m.text}
-                {m.images && m.images.length > 0 && (
-                  <div style={S.thumbRow}>
-                    {m.images.map((src, j) => (
-                      // eslint-disable-next-line react/no-array-index-key
-                      <img key={j} src={src} alt="pasted" style={S.thumb} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <>
-                <div style={S.tutorAvatar}>C</div>
-                <div>
-                  {m.toolCalls && m.toolCalls.length > 0 && (
-                    <div style={S.toolStack}>
-                      {m.toolCalls.map((call) => (
-                        <ToolCallCard key={call.id} call={call} />
-                      ))}
-                    </div>
-                  )}
-                  {(m.text || m.isError) && (
-                    <div style={m.isError ? S.errBubble : S.tutorBubble}>
-                      {m.isError ? m.text : <TutorMessage text={m.text} />}
-                    </div>
-                  )}
-                  {!m.isError && (
-                    <ChatMetrics
-                      observerMetrics={m.observerMetrics}
-                      tutorMetrics={m.tutorMetrics}
-                    />
-                  )}
-                  {!m.isError && m.id && (
-                    <div style={S.feedbackRow}>
-                      {(['up', 'down'] as const).map((dir) => (
-                        <button
-                          key={dir}
-                          type="button"
-                          aria-label={dir === 'up' ? 'Helpful' : 'Not helpful'}
-                          title={dir === 'up' ? 'Helpful' : 'Not helpful'}
-                          disabled={!!ratings[m.id as string]}
-                          style={{
-                            ...S.feedbackBtn,
-                            ...(ratings[m.id as string] === dir
-                              ? S.feedbackBtnRated
-                              : ratings[m.id as string]
-                                ? S.feedbackBtnLocked
-                                : {}),
-                          }}
-                          onClick={() => rateMessage(m, dir)}
-                        >
-                          {dir === 'up' ? '👍' : '👎'}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        ))}
-        {sending && !hasRunningTool && (
-          <div style={S.typing}>Coco is thinking…</div>
-        )}
-      </div>
-
-      <div style={S.composer}>
-        {pendingContextLabel && (
-          <div style={S.pendingContext}>
-            <span style={S.pendingContextText}>
-              Suggestion context attached: {pendingContextLabel}
-            </span>
+      {showHistory && !reviewing ? (
+        <div style={S.historyPanel}>
+          <div style={S.historyPanelHeader}>
+            <span style={S.historyTitle}>Past conversations</span>
             <button
               type="button"
-              style={S.pendingContextX}
-              aria-label="Remove suggestion context"
-              title="Remove suggestion context"
-              onClick={() => {
-                pendingContextRef.current = null;
-                setPendingContextLabel(null);
-              }}
+              style={{ ...S.historyBack, marginLeft: 'auto' }}
+              onClick={() => setShowHistory(false)}
             >
-              ×
+              Back to chat
             </button>
           </div>
-        )}
-        {pendingImages.length > 0 && (
-          <div style={S.pending}>
-            {pendingImages.map((src, i) => (
+          <div style={S.historyList}>
+            {historyLoading && (
+              <div style={S.empty}>Loading conversations…</div>
+            )}
+            {!historyLoading && historyError && (
+              <div style={S.empty}>
+                Conversation history could not be loaded.
+              </div>
+            )}
+            {!historyLoading && !historyError && conversations.length === 0 && (
+              <div style={S.empty}>
+                Your past conversations will appear here.
+              </div>
+            )}
+            {!historyLoading &&
+              conversations.map((conversation) => (
+                <button
+                  key={conversation.sessionId}
+                  type="button"
+                  style={S.historyItem}
+                  onClick={() => setReviewing(conversation)}
+                >
+                  <span style={S.historyItemTitle}>
+                    {conversationTitle(conversation)}
+                  </span>
+                  <span style={S.historyItemMeta}>
+                    {formatConversationDate(conversation.updatedAt)}
+                    {' · '}
+                    {conversation.messages.length}{' '}
+                    {conversation.messages.length === 1
+                      ? 'message'
+                      : 'messages'}
+                  </span>
+                  <span style={S.historyItemPreview}>
+                    {conversationPreview(conversation)}
+                  </span>
+                </button>
+              ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          {reviewing && (
+            <div style={S.reviewBanner}>
+              <span>Viewing a past conversation</span>
+              <button
+                type="button"
+                style={{ ...S.historyBack, marginLeft: 'auto' }}
+                onClick={() => setReviewing(null)}
+              >
+                Back to history
+              </button>
+            </div>
+          )}
+          <div style={S.list} ref={listRef}>
+            {(reviewing?.messages ?? messages).length === 0 && !sending && (
+              <div style={S.empty}>
+                Ask Coco about your task, an AI tool, or anything else.
+                <br />
+                You can paste a screenshot to show what you&apos;re working on.
+              </div>
+            )}
+            {(reviewing?.messages ?? messages).map((m, i) => (
               // eslint-disable-next-line react/no-array-index-key
-              <div key={i} style={S.pendingThumbWrap}>
-                <img src={src} alt="pending" style={S.thumb} />
+              <div key={i} style={m.role === 'user' ? S.userRow : S.tutorRow}>
+                {m.role === 'user' ? (
+                  <div style={S.userBubble}>
+                    {m.text}
+                    {m.images && m.images.length > 0 && (
+                      <div style={S.thumbRow}>
+                        {m.images.map((src, j) => (
+                          // eslint-disable-next-line react/no-array-index-key
+                          <img key={j} src={src} alt="pasted" style={S.thumb} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div style={S.tutorAvatar}>C</div>
+                    <div>
+                      {m.toolCalls && m.toolCalls.length > 0 && (
+                        <div style={S.toolStack}>
+                          {m.toolCalls.map((call) => (
+                            <ToolCallCard key={call.id} call={call} />
+                          ))}
+                        </div>
+                      )}
+                      {(m.text || m.isError) && (
+                        <div style={m.isError ? S.errBubble : S.tutorBubble}>
+                          {m.isError ? m.text : <TutorMessage text={m.text} />}
+                        </div>
+                      )}
+                      {!m.isError && (
+                        <ChatMetrics
+                          observerMetrics={m.observerMetrics}
+                          tutorMetrics={m.tutorMetrics}
+                        />
+                      )}
+                      {!m.isError && m.id && (
+                        <div style={S.feedbackRow}>
+                          {(['up', 'down'] as const).map((dir) => (
+                            <button
+                              key={dir}
+                              type="button"
+                              aria-label={
+                                dir === 'up' ? 'Helpful' : 'Not helpful'
+                              }
+                              title={dir === 'up' ? 'Helpful' : 'Not helpful'}
+                              disabled={!!ratings[m.id as string]}
+                              style={{
+                                ...S.feedbackBtn,
+                                ...(ratings[m.id as string] === dir
+                                  ? S.feedbackBtnRated
+                                  : ratings[m.id as string]
+                                    ? S.feedbackBtnLocked
+                                    : {}),
+                              }}
+                              onClick={() => rateMessage(m, dir)}
+                            >
+                              {dir === 'up' ? '👍' : '👎'}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+            {sending && !hasRunningTool && (
+              <div style={S.typing}>Coco is thinking…</div>
+            )}
+          </div>
+
+          <div style={S.composer}>
+            {pendingContextLabel && (
+              <div style={S.pendingContext}>
+                <span style={S.pendingContextText}>
+                  Suggestion context attached: {pendingContextLabel}
+                </span>
                 <button
                   type="button"
-                  style={S.pendingX}
-                  onClick={() => setPendingImages((prev) => prev.filter((_, j) => j !== i))}
+                  style={S.pendingContextX}
+                  aria-label="Remove suggestion context"
+                  title="Remove suggestion context"
+                  onClick={() => {
+                    pendingContextRef.current = null;
+                    setPendingContextLabel(null);
+                  }}
                 >
                   ×
                 </button>
               </div>
-            ))}
+            )}
+            {pendingImages.length > 0 && (
+              <div style={S.pending}>
+                {pendingImages.map((src, i) => (
+                  // eslint-disable-next-line react/no-array-index-key
+                  <div key={i} style={S.pendingThumbWrap}>
+                    <img src={src} alt="pending" style={S.thumb} />
+                    <button
+                      type="button"
+                      style={S.pendingX}
+                      onClick={() =>
+                        setPendingImages((prev) =>
+                          prev.filter((_, j) => j !== i),
+                        )
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={S.inputRow}>
+              <textarea
+                style={S.textarea}
+                rows={2}
+                placeholder="Ask the tutor… (paste an image to attach)"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onPaste={onPaste}
+                onKeyDown={onKeyDown}
+              />
+              <button
+                type="button"
+                style={{
+                  ...S.sendBtn,
+                  ...(canSend ? {} : S.sendBtnDisabled),
+                }}
+                onClick={handleSend}
+                disabled={!canSend}
+              >
+                Send
+              </button>
+            </div>
+            <div style={S.hotkeyHint}>
+              Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to
+              grab a screenshot
+            </div>
           </div>
-        )}
-        <div style={S.inputRow}>
-          <textarea
-            style={S.textarea}
-            rows={2}
-            placeholder="Ask the tutor… (paste an image to attach)"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onPaste={onPaste}
-            onKeyDown={onKeyDown}
-          />
-          <button
-            type="button"
-            style={{ ...S.sendBtn, ...(canSend ? {} : S.sendBtnDisabled) }}
-            onClick={handleSend}
-            disabled={!canSend}
-          >
-            Send
-          </button>
-        </div>
-        <div style={S.hotkeyHint}>
-          Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to grab a screenshot
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 }
