@@ -269,3 +269,52 @@ describe('instant suggestion actions', () => {
     expect(onChat).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('window controls', () => {
+  it('offers expand and collapse controls for an adjustable notification', () => {
+    const onToggleExpanded = jest.fn();
+    const { rerender } = render(
+      <NotificationBubble
+        message="Adjust me"
+        adjustable
+        expanded={false}
+        onToggleExpanded={onToggleExpanded}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Expand notification' }),
+    );
+    expect(onToggleExpanded).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <NotificationBubble
+        message="Adjust me"
+        adjustable
+        expanded
+        onToggleExpanded={onToggleExpanded}
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: 'Collapse notification' }),
+    ).toBeInTheDocument();
+  });
+
+  it('does not show an expand control for a fixed notification', () => {
+    render(<NotificationBubble message="Fixed" />);
+    expect(
+      screen.queryByRole('button', { name: 'Expand notification' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reveals the full message when expanded', () => {
+    const message = `${'Preview text '.repeat(20)}full-message-ending`;
+    const { rerender } = render(
+      <NotificationBubble message={message} adjustable expanded={false} />,
+    );
+    expect(screen.queryByText(/full-message-ending/)).not.toBeInTheDocument();
+
+    rerender(<NotificationBubble message={message} adjustable expanded />);
+    expect(screen.getByText(/full-message-ending/)).toBeInTheDocument();
+  });
+});
