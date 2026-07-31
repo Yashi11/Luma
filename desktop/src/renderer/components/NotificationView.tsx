@@ -149,29 +149,10 @@ function truncateForPreview(text: string): string {
 }
 
 // ── Markdown renderer config ──────────────────────────────────────────────────
-// Pythony languages we treat as "visualization code" and never render.
-// Python is the only one used by the tutor today, but Plotly/JSON specs
-// might appear later — keep the list narrow and explicit.
-const VIZ_CODE_LANGS = new Set(['python', 'py']);
-
 // Custom react-markdown renderers:
-//  - <code>: drop fenced visualization code blocks (per the user request);
-//    keep inline code and short non-python fences.
-//  - <a>:    open external links in the system browser via shell, not
+//  - <a>: open external links in the system browser via shell, not
 //    inside this transparent BrowserWindow.
 const markdownComponents: React.ComponentProps<typeof Markdown>['components'] = {
-  code({ inline, className, children, ...props }: any) {
-    const lang = /language-(\w+)/.exec(className || '')?.[1]?.toLowerCase();
-    if (!inline && lang && VIZ_CODE_LANGS.has(lang)) {
-      // Hide the visualization code block entirely — the toast is for guidance.
-      return null;
-    }
-    return (
-      <code className={className} {...props}>
-        {children}
-      </code>
-    );
-  },
   a({ href, children, ...props }: any) {
     return (
       <a href={href} target="_blank" rel="noreferrer" {...props}>
