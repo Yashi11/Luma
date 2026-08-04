@@ -10,11 +10,11 @@ import chz
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from proactive_tutor.html_executor import VIZ_ROOT, VizResult, save_html_visualization
 from proactive_tutor.tutor_system import TutorSystem
 from py_utils.logging import init_logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -57,10 +57,13 @@ class EventRequest(BaseModel):
 
 class GuidanceResponse(BaseModel):
     guidance: str
+    llm_metrics: dict | None = None
+    tool_calls: list[dict] = Field(default_factory=list)
 
 
 class InstantSuggestionRequest(BaseModel):
     observation: str
+    image_paths: list[str] | None = None
     task_label: str | None = None
     scenario: str = "everyday_support"
     ai_tools: list[str] = []
@@ -73,6 +76,7 @@ class InstantSuggestionResponse(BaseModel):
     targetTool: str | None = None
     prompt: str | None = None
     copyText: str  # unified text the UI copies (body for content, prompt for delegate)
+    llm_metrics: dict | None = None
 
 
 class ContextResponse(BaseModel):
@@ -99,6 +103,15 @@ class ProblemStatementRequest(BaseModel):
 
 class MemoryRequest(BaseModel):
     memory: str
+
+
+class ConversationMessage(BaseModel):
+    role: str
+    text: str
+
+
+class ConversationRequest(BaseModel):
+    messages: list[ConversationMessage]
 
 
 class MemoryResponse(BaseModel):
@@ -430,17 +443,22 @@ async def suggestion_instant(req: InstantSuggestionRequest):
     The desktop app calls this eagerly when a proactive bubble appears so the
     suggestion can be revealed instantly when the user clicks "Help me".
     """
-    from proactive_tutor.instant_suggestion import generate_instant_suggestion
+    from proactive_tutor.instant_suggestion import (
+        generate_instant_suggestion_with_metrics,
+    )
 
     try:
-        result = await asyncio.to_thread(
-            generate_instant_suggestion,
+        result, llm_metrics = await asyncio.to_thread(
+            generate_instant_suggestion_with_metrics,
             req.observation,
             req.task_label,
             req.scenario,
             req.ai_tools,
             configured_model_name,
+            tutor.memory if tutor is not None else TutorSystem._load_memory(),
+            req.image_paths,
         )
+        result["llm_metrics"] = llm_metrics
         return InstantSuggestionResponse(**result)
     except Exception as e:
         logger.error(f"instant suggestion failed: {e}", exc_info=True)
@@ -454,18 +472,83 @@ async def handle_user_prompt(req: EventRequest):
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     try:
         # TutorSystem calls are blocking (LLM I/O); run in a thread.
-        raw_guidance = await asyncio.to_thread(
-            tutor.handle_user_prompt,
+        raw_guidance, llm_metrics = await asyncio.to_thread(
+            tutor.handle_user_prompt_with_metrics,
             req.observation,
             req.image_paths,
             req.user_text,
         )
         # Execute visualization code (also blocking) and mutate the JSON.
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
-        return GuidanceResponse(guidance=guidance)
+        return GuidanceResponse(
+            guidance=guidance,
+            llm_metrics=llm_metrics,
+            tool_calls=llm_metrics.get("tool_calls", []),
+        )
     except Exception as e:
         logger.error(f"Error in handle_user_prompt: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@app.post("/events/user_prompt/stream")
+async def handle_user_prompt_stream(req: EventRequest):
+    """Stream tutor tool activity and final-answer text as SSE events."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+
+    async def event_stream():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+
+        def publish(event: dict) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        worker = asyncio.create_task(
+            asyncio.to_thread(
+                tutor.handle_user_prompt_with_metrics,
+                req.observation,
+                req.image_paths,
+                req.user_text,
+                publish,
+            )
+        )
+        try:
+            while not worker.done() or not queue.empty():
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                except TimeoutError:
+                    continue
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+            raw_guidance, llm_metrics = await worker
+            while not queue.empty():
+                event = queue.get_nowait()
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
+            tool_calls = llm_metrics.get("tool_calls", [])
+            observer_metrics = next(
+                (
+                    call.get("result", {}).get("llm_metrics")
+                    for call in tool_calls
+                    if call.get("name") == "observe_screen"
+                    and isinstance(call.get("result"), dict)
+                ),
+                None,
+            )
+            done = {
+                "type": "done",
+                "guidance": guidance,
+                "llm_metrics": llm_metrics,
+                "tool_calls": tool_calls,
+                "observer_metrics": observer_metrics,
+            }
+            yield f"data: {json.dumps(done, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            logger.error("Error in streaming user prompt: %s", exc, exc_info=True)
+            error = {"type": "error", "error": str(exc)}
+            yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/events/pause", response_model=GuidanceResponse)
@@ -474,15 +557,19 @@ async def handle_pause(req: EventRequest):
     if tutor is None:
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     try:
-        raw_guidance = await asyncio.to_thread(
-            tutor.handle_pause,
+        raw_guidance, llm_metrics = await asyncio.to_thread(
+            tutor.handle_pause_with_metrics,
             req.observation,
             req.trigger_reason,
             req.evidence,
             req.teaching_depth,
         )
         guidance = await asyncio.to_thread(_process_guidance, raw_guidance)
-        return GuidanceResponse(guidance=guidance)
+        return GuidanceResponse(
+            guidance=guidance,
+            llm_metrics=llm_metrics,
+            tool_calls=llm_metrics.get("tool_calls", []),
+        )
     except Exception as e:
         logger.error(f"Error in handle_pause: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -578,6 +665,16 @@ async def reset_context():
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     tutor.reset_session()
     logger.info("Session reset: conversation history and curriculum state cleared")
+    return StatusResponse(status="ok")
+
+
+@app.post("/context/conversation", response_model=StatusResponse)
+async def restore_conversation(req: ConversationRequest):
+    """Restore a saved transcript so the next turn continues that conversation."""
+    if tutor is None:
+        raise HTTPException(status_code=503, detail="TutorSystem not initialized")
+    tutor.restore_conversation([message.model_dump() for message in req.messages])
+    logger.info("Restored %d saved conversation messages", len(req.messages))
     return StatusResponse(status="ok")
 
 

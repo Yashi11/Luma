@@ -72,7 +72,9 @@ def _load_judge_prompt(scenario: str = "everyday_support") -> str:
     prompt_dir = {
         "student_learning": "prompts_problem_solving",
     }.get(scenario, "prompts_everyday")
-    return (Path(__file__).parent / prompt_dir / "judge.txt").read_text(encoding="utf-8")
+    return (Path(__file__).parent / prompt_dir / "judge.txt").read_text(
+        encoding="utf-8"
+    )
 
 
 _JUDGE_PROMPT: str = _load_judge_prompt()
@@ -408,6 +410,10 @@ class ProgressDetector:
             f"since_last_fire={now - self._last_fire_ts:.0f}s)"
         )
 
+        if self._screen.is_sensing_paused():
+            logger.info("ProgressDetector: skipping tick — sensing is asleep")
+            return
+
         # 1. Grace period after session start
         elapsed = now - self._start_ts
         if elapsed < self._config.session_start_grace_seconds:
@@ -482,7 +488,7 @@ class ProgressDetector:
             image_path, timestamp = await self._screen._inspect()
             if image_path:
                 self._ai_processor._add_snapshot(image_path, timestamp)
-                fresh_obs, _ = await self._ai_processor._handle_observation(
+                fresh_obs, _, _ = await self._ai_processor._handle_observation(
                     type="progress_check"
                 )
                 # The observer stamps each call with an id; grab the fresh one so
@@ -660,7 +666,7 @@ class ProgressDetector:
         from sensing.segment_processor import _observe  # late import to avoid cycle
 
         try:
-            raw = _observe(
+            raw, _ = _observe(
                 text_prompt=user_prompt,
                 image_paths=[],
                 system_prompt=self._judge_prompt,
@@ -735,6 +741,7 @@ class ProgressDetector:
     ) -> None:
         """Publish a pause_detected event with the judgment's trigger_type."""
         ai = self._ai_processor
+        suggestion_image_paths = list(getattr(ai, "_last_observation_image_paths", []))
 
         # Add the snapshot so _handle_observation has visual context
         if image_path and timestamp:
@@ -742,11 +749,12 @@ class ProgressDetector:
 
         # Reuse the observer to build a rich observation (same as pause)
         try:
-            obs, text = await ai._handle_observation(type="pause")
+            obs, text, metrics = await ai._handle_observation(type="pause")
         except Exception as e:
             logger.error(f"ProgressDetector: observer failed during fire: {e}")
             obs = f"Struggle detected: {judgment.evidence}"
             text = obs
+            metrics = None
 
         # Prepend human-readable evidence to the observation so downstream
         # prompts and logs explain *why* we spoke up (transparency).
@@ -756,7 +764,12 @@ class ProgressDetector:
         # Surface the struggle to live UI subscribers (e.g. the Electron avatar
         # bubble) tagged as "struggle" so it's visually distinct from a plain
         # pause and carries the prefixed transparency text.
-        ai._broadcast_observation("struggle", obs)
+        ai._broadcast_observation(
+            "struggle",
+            obs,
+            llm_metrics=metrics,
+            image_paths=suggestion_image_paths,
+        )
 
         payload = {
             "data": {
@@ -809,7 +822,11 @@ class ProgressDetector:
 
             label = _extract_task_label(obs) or "working on something"
 
-        ai.broadcast_invite(observation=obs, task_label=label)
+        ai.broadcast_invite(
+            observation=obs,
+            task_label=label,
+            image_paths=getattr(ai, "_last_observation_image_paths", []),
+        )
         logger.info(
             f"ProgressDetector: fired INVITE — task_label={label!r} "
             f"evidence={judgment.evidence!r}"

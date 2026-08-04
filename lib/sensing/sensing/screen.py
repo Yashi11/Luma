@@ -6,19 +6,18 @@ import asyncio
 import gc
 import logging
 import os
+import sys
 import time
 from collections import deque
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Literal
 
-import platform
-import sys
-
 import mss
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, Field
 from pynput import keyboard, mouse  # still synchronous
+from sensing.activity import SensingActivityMonitor
 from sensing.observer import Observer
 
 _IS_MACOS = sys.platform == "darwin"
@@ -171,6 +170,7 @@ class Screen(Observer):
         scroll_max_frequency: int = 10,
         scroll_session_timeout: float = 2.0,
         enable_global_hotkey: bool = False,
+        sensing_idle_timeout: float = 300.0,
     ) -> None:
         self.screens_dir = os.path.abspath(os.path.expanduser(screenshots_dir))
         os.makedirs(self.screens_dir, exist_ok=True)
@@ -235,6 +235,7 @@ class Screen(Observer):
         self._on_user_prompt_callback = None
         self._on_hotkey_callback = None
         self._enable_global_hotkey = enable_global_hotkey
+        self._activity_monitor = SensingActivityMonitor(sensing_idle_timeout)
 
         # Monitor list populated once the _worker starts mss — used by
         # capture_for_hotkey() to determine which monitor is under the cursor.
@@ -267,6 +268,16 @@ class Screen(Observer):
         self._last_active_click_time = time.time()
         self._idle_triggered = False
 
+    def is_sensing_paused(self) -> bool:
+        """Return whether capture is dormant because the laptop/user is idle."""
+        return self._activity_monitor.paused
+
+    def _note_user_activity(self) -> bool:
+        """Record input, returning True if this input woke dormant sensing."""
+        self._last_active_click_time = time.time()
+        self._idle_triggered = False
+        return self._activity_monitor.note_activity()
+
     def register_on_idle(self, callback):
         """Register a callback to be called when idle is detected."""
         self._on_idle_callback = callback
@@ -295,14 +306,14 @@ class Screen(Observer):
             )
 
     @staticmethod
-    def _mon_for(x: float, y: float, mons: list[dict]) -> int:
+    def _mon_for(x: float, y: float, mons: list[dict]) -> int | None:
         for idx, m in enumerate(mons, 1):
             if (
                 m["left"] <= x < m["left"] + m["width"]
                 and m["top"] <= y < m["top"] + m["height"]
             ):
                 return idx
-        return idx
+        return None
 
     async def _run_in_thread(self, func, *args, **kwargs):
         """Run a function in the custom thread pool."""
@@ -418,8 +429,14 @@ class Screen(Observer):
         # Draw the cursor box at original coordinates before any resize
         if draw_box:
             draw = ImageDraw.Draw(image)
-            x1, x2 = max(0, x - 30), min(frame.width, x + 30)
-            y1, y2 = max(0, y - 20), min(frame.height, y + 20)
+            # Clamp both ends of each axis. Input callbacks can briefly report a
+            # cursor outside every display (for example while display geometry is
+            # changing), and Pillow rejects rectangles whose second coordinate is
+            # less than the first.
+            x1 = min(max(0, x - 30), frame.width - 1)
+            x2 = min(max(0, x + 30), frame.width - 1)
+            y1 = min(max(0, y - 20), frame.height - 1)
+            y2 = min(max(0, y + 20), frame.height - 1)
             draw.rectangle([x1, y1, x2, y2], outline=box_color, width=box_width)
             del draw
 
@@ -494,13 +511,46 @@ class Screen(Observer):
 
     # ─────────────────────────────── inspect current frame screenshot
     async def _inspect(self) -> tuple[str, str]:
-        """Capture current screen and return path."""
+        """Capture the best available current screen and return its path.
+
+        A prompt can arrive before the first click or scroll establishes an
+        active monitor. In that case, prefer the monitor under the cursor and
+        then fall back to any captured frame. If the capture loop has not
+        produced a frame yet, return an empty result so callers can continue
+        without screen context.
+        """
         async with self._frame_lock:
-            if self._last_active_click_monitor_idx is None:
-                raise RuntimeError("No active monitor found for inspection.")
-            bf = self._frames[self._last_active_click_monitor_idx]
+            idx = self._last_active_click_monitor_idx
+            bf = self._frames.get(idx) if idx is not None else None
+
+            if bf is None and self._mons:
+                try:
+                    x, y = mouse.Controller().position
+                    idx = self._mon_for(x, y, self._mons)
+                    bf = self._frames.get(idx)
+                except Exception as exc:
+                    logging.getLogger("Screen").debug(
+                        "Could not determine the monitor under the cursor: %s", exc
+                    )
+
             if bf is None:
+                available = next(
+                    (
+                        (monitor_idx, frame)
+                        for monitor_idx, frame in self._frames.items()
+                        if frame is not None
+                    ),
+                    None,
+                )
+                if available is not None:
+                    idx, bf = available
+
+            if bf is None:
+                logging.getLogger("Screen").debug(
+                    "No captured frame is available for inspection yet."
+                )
                 return "", ""
+
             path, ts = await self._save_frame(bf, 0, 0, "inspect", draw_box=False)
             print(f"[INSPECT] saved current frame to: {path} at {ts}")
             return path, ts
@@ -514,6 +564,7 @@ class Screen(Observer):
 
         Returns ``(image_path, timestamp)`` on success, ``("", "")`` on failure.
         """
+        self._note_user_activity()
         # Get cursor position synchronously — mouse.Controller().position is fast.
         x, y = mouse.Controller().position
 
@@ -673,6 +724,8 @@ class Screen(Observer):
 
             # ---- keyboard event reception ----
             async def key_event(key, typ: str):
+                if self._note_user_activity():
+                    return  # wait for a fresh frame after waking
                 # Get current mouse position to determine active monitor
                 x, y = mouse.Controller().position
                 idx = self._mon_for(x, y, mons)
@@ -724,6 +777,8 @@ class Screen(Observer):
 
             # ---- scroll event reception ----
             async def scroll_event(x: float, y: float, dx: float, dy: float):
+                if self._note_user_activity():
+                    return  # wait for a fresh frame after waking
                 # Apply scroll filtering
                 async with self._scroll_lock:
                     if not self._should_log_scroll(x, y, dx, dy):
@@ -739,9 +794,7 @@ class Screen(Observer):
                 x = x - mon["left"]
                 y = y - mon["top"]
                 eid = time.time_ns()
-                self._last_active_click_time = time.time()
                 self._last_active_click_monitor_idx = idx
-                self._idle_triggered = False
 
                 # Only log significant scroll movements
                 scroll_magnitude = (dx**2 + dy**2) ** 0.5
@@ -775,7 +828,11 @@ class Screen(Observer):
 
             # ---- mouse event reception ----
             async def mouse_event(x: float, y: float, typ: str):
+                if self._note_user_activity():
+                    return  # wait for a fresh frame after waking
                 idx = self._mon_for(x, y, mons)
+                if idx is None:
+                    return
                 mon = mons[idx - self._MON_START]
                 x = x - mon["left"]
                 y = y - mon["top"]
@@ -789,13 +846,11 @@ class Screen(Observer):
                 #     f"[MOUSE EVENT] [{eid}] {typ} at ({x}, {y}) on monitor {idx}, mon width={mon['width']}, height={mon['height']}"
                 # )
                 # update last active click time
-                self._last_active_click_time = time.time()
                 self._last_active_click_monitor_idx = idx
-                self._idle_triggered = False
                 log.info(
                     f"{typ:<6} @({x:7.1f},{y:7.1f}) → mon={idx}   {'(guarded)' if self._skip() else ''}"
                 )
-                if self._skip() or idx is None:
+                if self._skip():
                     return
 
                 async with self._frame_lock:
@@ -824,9 +879,30 @@ class Screen(Observer):
             # ---- main capture loop ----
             log.info(f"Screen observer started — guarding {self._guard or '∅'}")
             frame_count = 0
+            was_sensing_paused = False
 
             while self._running:  # flag from base class
                 t0 = time.time()
+
+                sensing_paused = self._activity_monitor.refresh()
+                if sensing_paused:
+                    if not was_sensing_paused:
+                        log.info(
+                            "Screen observer sleeping (%s)",
+                            self._activity_monitor.reason,
+                        )
+                        self._pending_event = None
+                        if self._debounce_handle:
+                            self._debounce_handle.cancel()
+                            self._debounce_handle = None
+                        async with self._frame_lock:
+                            self._frames.clear()
+                    was_sensing_paused = True
+                    await asyncio.sleep(1.0)
+                    continue
+                if was_sensing_paused:
+                    log.info("Screen observer resumed after user activity")
+                was_sensing_paused = False
 
                 # refresh 'before' buffers
                 for idx, m in enumerate(mons, 1):

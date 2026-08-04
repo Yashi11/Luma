@@ -7,6 +7,7 @@ import ObservationBubble, {
 import PetSprite from './components/PetSprite';
 import {
   ActivityRecord,
+  InstantSuggestion,
   LANE_LABEL,
   ObservationEvent,
   ObservationStatus,
@@ -80,6 +81,118 @@ function dayHeading(dayStartTs: number, todayStart: number): string {
   });
 }
 
+function formatMetricTokens(n?: number): string {
+  if (typeof n !== 'number') return '0';
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+function formatMetricLatency(ms?: number): string {
+  if (typeof ms !== 'number') return '0s';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+function LlmMetricChips({ record }: { record: ActivityRecord }) {
+  const m = record.llm_metrics;
+  if (!m) return null;
+  return (
+    <div className="obs-history-metrics">
+      <span>{formatMetricTokens(m.input_tokens ?? m.prompt_tokens)} in</span>
+      <span>{formatMetricTokens(m.output_tokens ?? m.completion_tokens)} out</span>
+      <span>{formatMetricLatency(m.duration_ms)}</span>
+    </div>
+  );
+}
+
+function SupportControls({
+  record,
+  isOpen,
+  onToggle,
+  onRate,
+}: {
+  record: ActivityRecord;
+  isOpen: boolean;
+  onToggle: () => void;
+  onRate: (rating: 'up' | 'down') => void;
+}) {
+  const support = record.proactive_support;
+  if (!support) return null;
+  const canView = support.suggestion != null || support.available === true;
+  return (
+    <div className="obs-support-controls">
+      {canView && (
+        <button
+          type="button"
+          className="obs-support-view"
+          onClick={onToggle}
+          aria-expanded={isOpen}
+        >
+          {isOpen ? 'Hide' : 'View support'}
+        </button>
+      )}
+      {(['up', 'down'] as const).map((rating) => (
+        <button
+          key={rating}
+          type="button"
+          className={`obs-support-rating${
+            support.rating === rating ? ' is-rated' : ''
+          }`}
+          aria-label={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
+          title={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
+          disabled={support.rating != null}
+          onClick={() => onRate(rating)}
+        >
+          {rating === 'up' ? '👍' : '👎'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function HistoricalSupport({
+  record,
+  onViewConversation,
+  loading,
+  error,
+}: {
+  record: ActivityRecord;
+  onViewConversation: () => void;
+  loading: boolean;
+  error: boolean;
+}) {
+  const support = record.proactive_support;
+  if (!support) return null;
+  const { suggestion } = support;
+  if (loading) {
+    return <div className="obs-support-content">Preparing suggestion…</div>;
+  }
+  if (!suggestion) {
+    return (
+      <div className="obs-support-content obs-support-content--conversation">
+        <p>
+          {error
+            ? 'The suggestion could not be loaded.'
+            : 'This support continued in the conversation.'}
+        </p>
+        {support.engaged && (
+          <button type="button" onClick={onViewConversation}>
+            View conversation →
+          </button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="obs-support-content">
+      <strong>{suggestion.title}</strong>
+      <p>
+        {suggestion.kind === 'delegate' ? suggestion.prompt : suggestion.body}
+      </p>
+    </div>
+  );
+}
+
 function FlowTimeline({ summary }: { summary: DaySummary }) {
   const { segments, windowStartTs, windowEndTs } = summary;
   const winDur = Math.max(1, windowEndTs - windowStartTs);
@@ -116,14 +229,25 @@ function FlowTimeline({ summary }: { summary: DaySummary }) {
 function ActivityPanel({
   records,
   onClose,
+  onViewConversation,
+  onLoadSuggestion,
+  onRateSupport,
 }: {
   records: ActivityRecord[];
   onClose: () => void;
+  onViewConversation: () => void;
+  onLoadSuggestion: (
+    record: ActivityRecord,
+  ) => Promise<InstantSuggestion | null>;
+  onRateSupport: (record: ActivityRecord, rating: 'up' | 'down') => void;
 }) {
   const nowSec = Math.floor(Date.now() / 1000);
   const todayStart = dayStartOf(nowSec);
   const [selectedDay, setSelectedDay] = useState(todayStart);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [openSupport, setOpenSupport] = useState<Set<number>>(new Set());
+  const [loadingSupport, setLoadingSupport] = useState<Set<string>>(new Set());
+  const [supportErrors, setSupportErrors] = useState<Set<string>>(new Set());
 
   const buckets = dailyBuckets(records, 14, nowSec);
   const summary = summarizeDay(records, selectedDay, nowSec);
@@ -145,6 +269,32 @@ function ActivityPanel({
   function selectDay(ts: number) {
     setSelectedDay(ts);
     setExpanded(new Set());
+    setOpenSupport(new Set());
+  }
+
+  async function toggleSupport(i: number, record: ActivityRecord) {
+    const opening = !openSupport.has(i);
+    setOpenSupport((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+    if (!opening || record.proactive_support?.suggestion) return;
+    const key = record.observation_id ?? `${record.ts}-${i}`;
+    setLoadingSupport((prev) => new Set(prev).add(key));
+    setSupportErrors((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    const suggestion = await onLoadSuggestion(record);
+    setLoadingSupport((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    if (!suggestion) setSupportErrors((prev) => new Set(prev).add(key));
   }
 
   return (
@@ -212,6 +362,8 @@ function ActivityPanel({
             const isOpen = expanded.has(i);
             const lane = laneOf(e.status);
             const label = STATUS_LABEL[e.status] ?? STATUS_LABEL.observing;
+            const supportOpen = openSupport.has(i);
+            const supportKey = e.observation_id ?? `${e.ts}-${i}`;
             return (
               // eslint-disable-next-line react/no-array-index-key
               <li key={i} className="obs-history-entry">
@@ -226,6 +378,20 @@ function ActivityPanel({
                       {formatClockTime(e.ts)}
                     </span>
                   </div>
+                  {e.proactive_support &&
+                    (e.proactive_support.suggestion ||
+                      e.proactive_support.available) && (
+                      <div className="obs-support-status">
+                        <span>Proactive support</span>
+                        <SupportControls
+                          record={e}
+                          isOpen={supportOpen}
+                          onToggle={() => toggleSupport(i, e)}
+                          onRate={(rating) => onRateSupport(e, rating)}
+                        />
+                      </div>
+                    )}
+                  <LlmMetricChips record={e} />
                   <button
                     type="button"
                     className="obs-history-row"
@@ -242,6 +408,14 @@ function ActivityPanel({
                       ›
                     </span>
                   </button>
+                  {supportOpen && (
+                    <HistoricalSupport
+                      record={e}
+                      onViewConversation={onViewConversation}
+                      loading={loadingSupport.has(supportKey)}
+                      error={supportErrors.has(supportKey)}
+                    />
+                  )}
                 </div>
               </li>
             );
@@ -325,17 +499,33 @@ function PetView() {
 
   // Cmd/Ctrl+Shift+H toggles the history panel from anywhere on the system.
   useEffect(() => {
-    const cleanup = window.electron?.ipcRenderer.on(
+    const cleanupToggle = window.electron?.ipcRenderer.on(
       'toggle-observation-history',
       () => setShowHistory((v) => !v),
     );
-    return () => { if (typeof cleanup === 'function') cleanup(); };
+    const cleanupOpen = window.electron?.ipcRenderer.on(
+      'open-observation-history',
+      () => setShowHistory(true),
+    );
+    window.electron?.ipcRenderer.sendMessage('avatar-renderer-ready');
+    return () => {
+      if (typeof cleanupToggle === 'function') cleanupToggle();
+      if (typeof cleanupOpen === 'function') cleanupOpen();
+    };
   }, []);
 
-  // Hydrate persisted activity from the main process once on mount. The file
-  // is chronological (oldest-first); we keep state newest-first to match the
-  // live prepend below. Live events that fire after this still prepend.
   useEffect(() => {
+    window.electron?.ipcRenderer.sendMessage('activity-history-visibility', {
+      visible: showHistory,
+    });
+  }, [showHistory]);
+
+  // Refresh from persisted activity whenever History opens. Engagement is
+  // written by the main process after the original observation, so a one-time
+  // mount snapshot can otherwise remain stale even though the disk record is
+  // correct. The file is chronological; renderer state is newest-first.
+  useEffect(() => {
+    if (!showHistory) return undefined;
     let cancelled = false;
     window.electron?.ipcRenderer
       .invoke('get-activity-history')
@@ -347,9 +537,24 @@ function PetView() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [showHistory]);
 
   useEffect(() => {
+    const cleanupSuspend = window.electron?.ipcRenderer.on(
+      'system-suspend',
+      () => {
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        if (fadeTimer.current) clearTimeout(fadeTimer.current);
+        if (sleepTimer.current) clearTimeout(sleepTimer.current);
+        if (pulseTimer.current) clearTimeout(pulseTimer.current);
+        bubbleHoverRef.current = false;
+        bubblePinnedRef.current = false;
+        setBubble(null);
+        setPulse(null);
+        setMood('dormant');
+      },
+    );
+
     const cleanup = window.electron?.ipcRenderer.on(
       'observation-update',
       (data: any) => {
@@ -420,6 +625,11 @@ function PetView() {
           status: incomingStatus,
           observation: cleanObservation(event.observation),
           ts: event.ts ?? Math.floor(Date.now() / 1000),
+          observation_id: event.observation_id,
+          proactive_support: showHelpButton
+            ? { engaged: false, available: true }
+            : undefined,
+          llm_metrics: event.llm_metrics,
         };
         // Prepend so the list is newest-first.
         // Deduplicate: if the most recent record has the same text and
@@ -439,6 +649,7 @@ function PetView() {
     );
 
     return () => {
+      if (typeof cleanupSuspend === 'function') cleanupSuspend();
       if (typeof cleanup === 'function') cleanup();
       if (hideTimer.current) clearTimeout(hideTimer.current);
       if (fadeTimer.current) clearTimeout(fadeTimer.current);
@@ -506,6 +717,38 @@ function PetView() {
   const handleHelpMe = async () => {
     if (!bubble) return;
     const current = bubble;
+    const engagedAt = Math.floor(Date.now() / 1000);
+    const recordEngagement = (
+      suggestion: InstantSuggestion | undefined,
+      destination: 'inline' | 'conversation',
+    ) => {
+      if (!current.observationId) return;
+      setRecords((prev) =>
+        prev.map((record) =>
+          record.observation_id === current.observationId
+            ? {
+                ...record,
+                proactive_support: {
+                  engaged: true,
+                  engaged_at: engagedAt,
+                  suggestion,
+                  destination,
+                },
+              }
+            : record,
+        ),
+      );
+      window.electron?.ipcRenderer.sendMessage('activity-support-engaged', {
+        observationId: current.observationId,
+        engagedAt,
+        suggestion,
+        destination,
+      });
+    };
+
+    // Reflect the click immediately. If the precomputed content is available,
+    // the same record is enriched below so History can reopen it verbatim.
+    recordEngagement(undefined, 'conversation');
     window.electron?.ipcRenderer.sendMessage('training-feedback', {
       kind: 'engage',
       surface: 'bubble',
@@ -521,6 +764,7 @@ function PetView() {
     });
 
     if (res?.status === 'ready' && res.suggestion) {
+      recordEngagement(res.suggestion, 'inline');
       // Pin the bubble: once the suggestion is revealed it stays until the user
       // closes it with ×. Cancel any pending auto-hide from the Tier-2 phase.
       bubblePinnedRef.current = true;
@@ -568,9 +812,96 @@ function PetView() {
     }, FADE_MS);
   };
 
+  const handleChatAboutSuggestion = () => {
+    if (!bubble?.suggestion) return;
+    const current = bubble;
+    window.electron?.ipcRenderer.sendMessage('chat-about-suggestion', {
+      observationId: current.observationId,
+      status: current.status,
+      rawObservation: current.rawObservation ?? '',
+      suggestion: current.suggestion,
+      surface: 'bubble',
+    });
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    if (fadeTimer.current) clearTimeout(fadeTimer.current);
+    bubblePinnedRef.current = false;
+    setBubble(null);
+    setMood('idle');
+  };
+
   // Tier 3: user wants to read the full tutor guidance — open main window.
   const handleViewConversation = () => {
     window.electron?.ipcRenderer.sendMessage('open-main-window');
+  };
+
+  const loadHistoricalSuggestion = async (
+    record: ActivityRecord,
+  ): Promise<InstantSuggestion | null> => {
+    let res;
+    try {
+      res = await window.electron?.ipcRenderer.invoke(
+        'get-instant-suggestion',
+        {
+          observationId: record.observation_id ?? null,
+        },
+      );
+    } catch {
+      return null;
+    }
+    const suggestion = res?.status === 'ready' ? res.suggestion : null;
+    if (!suggestion) return null;
+    setRecords((prev) =>
+      prev.map((item) =>
+        item.observation_id === record.observation_id
+          ? {
+              ...item,
+              proactive_support: {
+                engaged: item.proactive_support?.engaged ?? false,
+                ...item.proactive_support,
+                suggestion,
+                available: true,
+              },
+            }
+          : item,
+      ),
+    );
+    return suggestion;
+  };
+
+  const rateHistoricalSupport = (
+    record: ActivityRecord,
+    rating: 'up' | 'down',
+  ) => {
+    if (!record.observation_id || record.proactive_support?.rating) return;
+    const ratedAt = Math.floor(Date.now() / 1000);
+    setRecords((prev) =>
+      prev.map((item) =>
+        item.observation_id === record.observation_id
+          ? {
+              ...item,
+              proactive_support: {
+                engaged: item.proactive_support?.engaged ?? false,
+                ...item.proactive_support,
+                rating,
+                rated_at: ratedAt,
+              },
+            }
+          : item,
+      ),
+    );
+    window.electron?.ipcRenderer.sendMessage('training-feedback', {
+      kind: rating === 'up' ? 'thumbs_up' : 'thumbs_down',
+      surface: 'history',
+      observation_id: record.observation_id,
+      status: record.status,
+      text:
+        record.proactive_support?.suggestion?.copyText ?? record.observation,
+    });
+    window.electron?.ipcRenderer.sendMessage('activity-support-rated', {
+      observationId: record.observation_id,
+      rating,
+      ratedAt,
+    });
   };
 
   const bubbleVisible = bubble != null;
@@ -604,6 +935,9 @@ function PetView() {
         <ActivityPanel
           records={records}
           onClose={() => setShowHistory(false)}
+          onViewConversation={handleViewConversation}
+          onLoadSuggestion={loadHistoricalSuggestion}
+          onRateSupport={rateHistoricalSupport}
         />
       )}
 
@@ -612,6 +946,7 @@ function PetView() {
         onHelpMe={handleHelpMe}
         onDismiss={handleDismiss}
         onViewConversation={handleViewConversation}
+        onChatAboutSuggestion={handleChatAboutSuggestion}
         onMouseEnter={handleBubbleEnter}
         onMouseLeave={handleBubbleLeave}
       />

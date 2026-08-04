@@ -10,6 +10,7 @@ import {
   encodeCustomChatbot,
   encodeCustomAgent,
 } from './observation-types';
+import type { LLMCallMetrics, TutorToolCall } from './observation-types';
 
 // Platform-appropriate label for the global screen-capture hot key
 // (registered in main.ts as CommandOrControl+Shift+Space).
@@ -109,14 +110,7 @@ function parseGuidance(raw: string): Guidance {
   return { text: raw };
 }
 
-// Hide fenced python/visualization code from the chat prose.
-const VIZ_CODE_LANGS = new Set(['python', 'py']);
 const markdownComponents: React.ComponentProps<typeof Markdown>['components'] = {
-  code({ inline, className, children, ...props }: any) {
-    const lang = /language-(\w+)/.exec(className || '')?.[1]?.toLowerCase();
-    if (!inline && lang && VIZ_CODE_LANGS.has(lang)) return null;
-    return <code className={className} {...props}>{children}</code>;
-  },
   a({ href, children, ...props }: any) {
     return <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>;
   },
@@ -132,6 +126,24 @@ interface ChatMessage {
   id?: string;
   /** When the message was appended — lets latency_s capture time-to-rate. */
   ts?: number;
+  observerMetrics?: LLMCallMetrics | null;
+  tutorMetrics?: LLMCallMetrics | null;
+  toolCalls?: TutorToolCall[];
+  /** Correlates incremental main-process events with this pending reply. */
+  requestId?: string;
+  isStreaming?: boolean;
+  /** Exact request payload retained so an error can be retried in place. */
+  retryText?: string;
+  retryImages?: string[];
+}
+
+interface SavedConversation {
+  sessionId: string;
+  title?: string;
+  problem: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ChatMessage[];
 }
 
 // crypto.randomUUID needs a secure context; fall back for safety.
@@ -139,6 +151,18 @@ const makeMessageId = (): string =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+function formatMetricTokens(n?: number): string {
+  if (typeof n !== 'number') return '0';
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+function formatMetricLatency(ms?: number): string {
+  if (typeof ms !== 'number') return '0s';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s`;
+  return `${Math.round(ms)}ms`;
+}
 
 // ── Styles (inline so the view is self-contained in a transparent window) ──────
 // Palette mirrors the onboarding panel: SALT Lab blue with a light-blue accent.
@@ -169,6 +193,21 @@ const S: Record<string, React.CSSProperties> = {
     fontSize: 15, color: '#9ca3af', padding: '3px 7px', borderRadius: 7,
   },
   iconBtnActive: { background: ACCENT_BG, color: ACCENT },
+  newSessionBtn: {
+    border: `1px solid ${ACCENT_BORDER}`, background: '#fff', cursor: 'pointer',
+    fontSize: 11.5, color: ACCENT, padding: '3px 8px', borderRadius: 7,
+    fontFamily: FONT, fontWeight: 600,
+  },
+  historyPanel: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#fff' },
+  historyPanelHeader: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', borderBottom: `1px solid ${BORDER}` },
+  historyTitle: { fontSize: 14, fontWeight: 700, color: '#374151' },
+  historyBack: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 700, fontFamily: FONT },
+  historyList: { flex: 1, overflowY: 'auto', padding: '8px 10px 12px', display: 'flex', flexDirection: 'column', gap: 6 },
+  historyItem: { width: '100%', border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 10, padding: '9px 10px', textAlign: 'left', cursor: 'pointer', fontFamily: FONT },
+  historyItemTitle: { display: 'block', color: '#374151', fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  historyItemMeta: { display: 'block', color: '#9ca3af', fontSize: 10.5, marginTop: 2 },
+  historyItemPreview: { display: 'block', color: '#6b7280', fontSize: 11.5, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  reviewBanner: { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: ACCENT_BG, borderBottom: `1px solid ${ACCENT_BORDER}`, color: ACCENT, fontSize: 11.5 },
   problem: { padding: '6px 14px', fontSize: 11, color: '#9ca3af', borderBottom: `1px solid #f3f4f6`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   list: { flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 },
   userRow: { alignSelf: 'flex-end', maxWidth: '85%' },
@@ -177,12 +216,16 @@ const S: Record<string, React.CSSProperties> = {
   userBubble: { background: ACCENT, color: '#fff', padding: '9px 13px', borderRadius: '16px 16px 4px 16px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   tutorBubble: { background: '#f3f4f6', color: '#374151', padding: '9px 13px', borderRadius: '4px 16px 16px 16px', fontSize: 13, lineHeight: 1.5 },
   errBubble: { background: '#fef2f2', color: '#b91c1c', padding: '9px 13px', borderRadius: 12, fontSize: 13, border: '1px solid #fecaca' },
+  retryBtn: { marginTop: 7, border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', borderRadius: 8, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
   thumbRow: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   thumb: { width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: `1px solid ${BORDER}` },
   example: { marginTop: 8, background: ACCENT_BG, border: `1px solid ${ACCENT_BORDER}`, borderRadius: 10, padding: '8px 10px', fontSize: 12, color: ACCENT },
   exampleBtn: { marginTop: 6, border: `1px solid ${ACCENT_BORDER}`, background: '#fff', borderRadius: 8, padding: '3px 9px', fontSize: 11, cursor: 'pointer', color: ACCENT },
   viz: { marginTop: 8, width: '100%', height: 280, border: `1px solid ${BORDER}`, borderRadius: 10, background: '#fff' },
   composer: { borderTop: `1px solid ${BORDER}`, padding: 10, background: '#fff' },
+  pendingContext: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '6px 8px', border: `1px solid ${ACCENT_BORDER}`, borderRadius: 8, background: ACCENT_BG, color: ACCENT, fontSize: 11.5 },
+  pendingContextText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  pendingContextX: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: '0 2px', fontFamily: FONT, fontSize: 14, lineHeight: 1 },
   pending: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
   pendingThumbWrap: { position: 'relative' },
   pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#374151', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
@@ -193,6 +236,17 @@ const S: Record<string, React.CSSProperties> = {
   hotkeyHint: { marginTop: 6, fontSize: 11, color: '#9ca3af', fontFamily: FONT, textAlign: 'center' },
   hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
   feedbackRow: { display: 'flex', gap: 2, marginTop: 4 },
+  metricRow: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, color: '#6b7280', fontSize: 10.5 },
+  metricChip: { border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 6, padding: '1px 5px', lineHeight: 1.35 },
+  toolStack: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 7 },
+  toolCard: { border: `1px solid ${ACCENT_BORDER}`, background: '#f8faff', borderRadius: 10, padding: '7px 9px', color: '#4b5563', fontSize: 11.5, lineHeight: 1.4 },
+  toolHeader: { display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: ACCENT },
+  toolIcon: { width: 18, height: 18, borderRadius: 5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: ACCENT_BG, fontSize: 11 },
+  toolStatus: { marginLeft: 'auto', color: '#16a34a', fontWeight: 600, fontSize: 10.5 },
+  toolStatusError: { color: '#b91c1c' },
+  toolArgs: { marginTop: 3, color: '#6b7280' },
+  toolDetails: { marginTop: 5 },
+  toolObservation: { borderTop: `1px solid ${BORDER}`, marginTop: 5, paddingTop: 5 },
   feedbackBtn: { border: '1px solid transparent', background: 'transparent', borderRadius: 6, padding: '0 5px', fontSize: 12, lineHeight: '20px', cursor: 'pointer', opacity: 0.45 },
   feedbackBtnRated: { opacity: 1, background: ACCENT_BG, borderColor: ACCENT_BORDER, cursor: 'default' },
   feedbackBtnLocked: { opacity: 0.25, cursor: 'default' },
@@ -200,6 +254,9 @@ const S: Record<string, React.CSSProperties> = {
   empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
   // Settings panel (mirrors the onboarding toolkit step)
   settings: { borderBottom: `1px solid ${BORDER}`, background: '#ffffff', padding: '14px', maxHeight: 360, overflowY: 'auto' },
+  toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
+  toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
+  toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
   groupLabel: { fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: ACCENT, marginBottom: 6 },
   chips: { display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 14 },
   chip: { fontSize: 13, fontWeight: 500, padding: '6px 14px', borderRadius: 999, background: '#fff', border: '1.5px solid #d1d5db', color: '#4b5563', cursor: 'pointer', fontFamily: FONT },
@@ -260,24 +317,167 @@ function TutorMessage({ text }: { text: string }) {
   );
 }
 
+export function ToolCallCard({ call }: { call: TutorToolCall }) {
+  if (call.name === 'observe_screen') {
+    const observation = call.result?.observation?.trim();
+    return (
+      <div style={S.toolCard}>
+        <div style={S.toolHeader}>
+          <span style={S.toolIcon}>▣</span>
+          <span>Current screen</span>
+          <span
+            style={{
+              ...S.toolStatus,
+              ...(call.status === 'error' ? S.toolStatusError : {}),
+            }}
+          >
+            {call.status === 'running'
+              ? 'Observing…'
+              : call.status === 'error'
+                ? 'Unavailable'
+                : 'Observed'}
+          </span>
+        </div>
+        {call.arguments?.focus && (
+          <div style={S.toolArgs}>{call.arguments.focus}</div>
+        )}
+        {call.result?.error && (
+          <div style={{ ...S.toolArgs, ...S.toolStatusError }}>
+            {call.result.error}
+          </div>
+        )}
+        {observation && (
+          <details style={S.toolDetails}>
+            <summary>View screen observation</summary>
+            <div style={S.toolObservation}>{observation}</div>
+          </details>
+        )}
+      </div>
+    );
+  }
+
+  const query = call.arguments?.query?.trim();
+  const start = call.arguments?.start_hh_mm_ago;
+  const end = call.arguments?.end_hh_mm_ago;
+  const results = call.result?.results ?? [];
+  const count = call.result?.count ?? results.length;
+  const windowLabel = start || end
+    ? `${start ?? 'any'} → ${end ?? 'now'} ago`
+    : 'most recent';
+
+  return (
+    <div style={S.toolCard}>
+      <div style={S.toolHeader}>
+        <span style={S.toolIcon}>⌕</span>
+        <span>{call.name}</span>
+        <span
+          style={{
+            ...S.toolStatus,
+            ...(call.status === 'error' ? S.toolStatusError : {}),
+          }}
+        >
+          {call.status === 'running'
+            ? 'Searching…'
+            : call.status === 'error'
+              ? 'Failed'
+              : `${count} found`}
+        </span>
+      </div>
+      <div style={S.toolArgs}>
+        {query ? `“${query}”` : 'Recent memory'} · {windowLabel} · limit{' '}
+        {call.arguments?.limit ?? 3} · evidence {call.arguments?.evidence_limit ?? 1}
+      </div>
+      {call.result?.error && <div style={S.toolArgs}>{call.result.error}</div>}
+      {results.length > 0 && (
+        <details style={S.toolDetails}>
+          <summary>View retrieved memory</summary>
+          {results.map((result, index) => (
+            <div key={result.id ?? `${call.id}-${index}`} style={S.toolObservation}>
+              {result.updated_at && (
+                <div style={{ color: '#9ca3af', fontSize: 10.5 }}>
+                  {new Date(result.updated_at).toLocaleString()}
+                </div>
+              )}
+              <div>{result.text}</div>
+              {result.evidence?.map((observation, evidenceIndex) => (
+                <div
+                  key={observation.id ?? `${call.id}-${index}-${evidenceIndex}`}
+                  style={{ color: '#6b7280', marginTop: 4 }}
+                >
+                  Evidence: {observation.content}
+                </div>
+              ))}
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
+
+function ChatMetrics({
+  observerMetrics,
+  tutorMetrics,
+}: {
+  observerMetrics?: LLMCallMetrics | null;
+  tutorMetrics?: LLMCallMetrics | null;
+}) {
+  const metrics = [observerMetrics, tutorMetrics].filter(
+    (m): m is LLMCallMetrics => Boolean(m),
+  );
+  if (metrics.length === 0) return null;
+
+  const inputTokens = metrics.reduce(
+    (total, m) => total + (m.input_tokens ?? m.prompt_tokens ?? 0),
+    0,
+  );
+  const outputTokens = metrics.reduce(
+    (total, m) => total + (m.output_tokens ?? m.completion_tokens ?? 0),
+    0,
+  );
+  const durationMs = metrics.reduce(
+    (total, m) => total + (m.duration_ms ?? 0),
+    0,
+  );
+
+  return (
+    <div style={S.metricRow}>
+      <span style={S.metricChip}>
+        {formatMetricTokens(inputTokens)} in / {formatMetricTokens(outputTokens)}{' '}
+        out / {formatMetricLatency(durationMs)}
+      </span>
+    </div>
+  );
+}
+
 export default function SessionChatView() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const [pendingContextLabel, setPendingContextLabel] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [startingNewSession, setStartingNewSession] = useState(false);
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
+  const [conversations, setConversations] = useState<SavedConversation[]>([]);
+  const [reviewing, setReviewing] = useState<SavedConversation | null>(null);
   const [profile, setProfile] = useState<{
     scenario: string;
     aiTools: string[];
+    hideAvatar: boolean;
   }>({
     scenario: 'everyday_support',
     aiTools: [],
+    hideAvatar: false,
   });
   // Editable draft of the settings, synced from the loaded profile.
   const [editScenario, setEditScenario] = useState('everyday_support');
   const [editTools, setEditTools] = useState<string[]>([]);
+  const [editHideAvatar, setEditHideAvatar] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   // "+ Custom" tool forms (mirrors the onboarding toolkit step).
   const [showAddChatbot, setShowAddChatbot] = useState(false);
@@ -295,6 +495,27 @@ export default function SessionChatView() {
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
   const listRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const pendingContextRef = useRef<string | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const problemRef = useRef('');
+
+  // Keep each active conversation on disk. A short debounce avoids a write for
+  // every streaming token while still preserving completed turns promptly.
+  useEffect(() => {
+    messagesRef.current = messages;
+    problemRef.current = problem;
+    if (!sessionIdRef.current || messages.length === 0) return undefined;
+    const timeout = window.setTimeout(() => {
+      window.electron?.ipcRenderer
+        .invoke('save-chat-conversation', {
+          sessionId: sessionIdRef.current,
+          problem,
+          messages,
+        })
+        .catch(() => {});
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [messages, problem]);
 
   // Rate a tutor message. Routed main → sensing /feedback → feedback.jsonl,
   // same pipeline as the bubble reactions.
@@ -317,32 +538,174 @@ export default function SessionChatView() {
     });
   }, []);
 
-  // Core send: appends the user turn, calls the local tutor via IPC, appends
-  // the tutor's reply. Text and/or pasted images are both optional.
-  const sendMessage = useCallback(
-    async (text: string, images: string[]) => {
-      const trimmed = text.trim();
-      if (!trimmed && images.length === 0) return;
-      setMessages((m) => [...m, { role: 'user', text: trimmed, images }]);
+  // Main relays SSE events from the tutor service. Keep one pending tutor
+  // message and update it in place so text and tool activity appear in order.
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on('chat-stream-event', (data: any) => {
+      const event = (data ?? {}) as {
+        requestId?: string;
+        type?: string;
+        text?: string;
+        call?: TutorToolCall;
+        guidance?: string;
+        error?: string;
+        observerMetrics?: LLMCallMetrics | null;
+        llm_metrics?: LLMCallMetrics | null;
+        tool_calls?: TutorToolCall[];
+      };
+      if (!event.requestId) return;
+      setMessages((current) =>
+        current.map((message) => {
+          if (message.requestId !== event.requestId) return message;
+          if (event.type === 'text_delta') {
+            return { ...message, text: message.text + (event.text ?? '') };
+          }
+          if (event.type === 'tool_call_started' && event.call) {
+            return {
+              ...message,
+              toolCalls: [
+                ...(message.toolCalls ?? []).filter((call) => call.id !== event.call?.id),
+                event.call,
+              ],
+            };
+          }
+          if (event.type === 'tool_call_completed' && event.call) {
+            return {
+              ...message,
+              toolCalls: (message.toolCalls ?? []).some((call) => call.id === event.call?.id)
+                ? (message.toolCalls ?? []).map((call) =>
+                    call.id === event.call?.id ? event.call as TutorToolCall : call,
+                  )
+                : [...(message.toolCalls ?? []), event.call],
+            };
+          }
+          if (event.type === 'done') {
+            return {
+              ...message,
+              text: event.guidance ?? message.text,
+              id: message.id ?? makeMessageId(),
+              ts: Date.now(),
+              observerMetrics: event.observerMetrics ?? null,
+              tutorMetrics: event.llm_metrics ?? null,
+              toolCalls: event.tool_calls ?? message.toolCalls ?? [],
+              isStreaming: false,
+            };
+          }
+          if (event.type === 'error') {
+            return {
+              ...message,
+              text: event.error ?? 'The tutor could not generate a response.',
+              isError: true,
+              isStreaming: false,
+            };
+          }
+          return message;
+        }),
+      );
+      if (event.type === 'done' || event.type === 'error') setSending(false);
+      scrollToBottom();
+    });
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, [scrollToBottom]);
+
+  const submitTutorRequest = useCallback(
+    async (requestId: string, userText: string, images: string[]) => {
       setSending(true);
       scrollToBottom();
       const res = await window.electron?.ipcRenderer.invoke('send-chat-message', {
-        userText: trimmed,
+        requestId,
+        userText,
         images,
       });
-      setSending(false);
-      const r = res as { guidance?: string; error?: string } | undefined;
-      if (r?.error) {
-        setMessages((m) => [...m, { role: 'tutor', text: r.error as string, isError: true }]);
-      } else {
-        setMessages((m) => [
-          ...m,
-          { role: 'tutor', text: r?.guidance ?? '', id: makeMessageId(), ts: Date.now() },
-        ]);
+      const r = res as {
+        streamed?: boolean;
+        guidance?: string;
+        error?: string;
+        observerMetrics?: LLMCallMetrics | null;
+        tutorMetrics?: LLMCallMetrics | null;
+        toolCalls?: TutorToolCall[];
+      } | undefined;
+      // Compatibility with older main processes and a fallback if IPC fails
+      // before a stream event can be delivered.
+      if (!r?.streamed && (r?.guidance !== undefined || r?.error)) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.requestId === requestId
+              ? {
+                  ...message,
+                  text: r.error ?? r.guidance ?? '',
+                  isError: Boolean(r.error),
+                  isStreaming: false,
+                  id: r.error ? undefined : makeMessageId(),
+                  ts: r.error ? undefined : Date.now(),
+                  observerMetrics: r.observerMetrics ?? null,
+                  tutorMetrics: r.tutorMetrics ?? null,
+                  toolCalls: r.toolCalls ?? [],
+                }
+              : message,
+          ),
+        );
+        setSending(false);
       }
       scrollToBottom();
     },
     [scrollToBottom],
+  );
+
+  // Core send: append the user turn and an empty tutor turn immediately. The
+  // latter is filled by chat-stream-event updates while the IPC request runs.
+  const sendMessage = useCallback(
+    async (text: string, images: string[]) => {
+      const trimmed = text.trim();
+      if (!trimmed && images.length === 0) return;
+      const requestId = makeMessageId();
+      const pendingContext = pendingContextRef.current;
+      const userText = pendingContext
+        ? `${pendingContext}\n\nThe user now says:\n${trimmed}`
+        : trimmed;
+      setMessages((m) => [
+        ...m,
+        { role: 'user', text: trimmed, images },
+        {
+          role: 'tutor',
+          text: '',
+          requestId,
+          isStreaming: true,
+          toolCalls: [],
+          retryText: userText,
+          retryImages: images,
+        },
+      ]);
+      pendingContextRef.current = null;
+      setPendingContextLabel(null);
+      await submitTutorRequest(requestId, userText, images);
+    },
+    [submitTutorRequest],
+  );
+
+  const retryMessage = useCallback(
+    async (message: ChatMessage) => {
+      if (sending || startingNewSession || message.retryText === undefined) return;
+      const previousRequestId = message.requestId;
+      const requestId = makeMessageId();
+      const images = message.retryImages ?? [];
+      setMessages((current) =>
+        current.map((item) =>
+          item.requestId === previousRequestId
+            ? {
+                ...item,
+                text: '',
+                requestId,
+                isError: false,
+                isStreaming: true,
+                toolCalls: [],
+              }
+            : item,
+        ),
+      );
+      await submitTutorRequest(requestId, message.retryText, images);
+    },
+    [sending, startingNewSession, submitTutorRequest],
   );
 
   // Session context from main. A new sessionId resets the conversation.
@@ -353,11 +716,49 @@ export default function SessionChatView() {
         problemStatement?: string;
       };
       if (sessionId && sessionId !== sessionIdRef.current) {
+        if (sessionIdRef.current && messagesRef.current.length > 0) {
+          window.electron?.ipcRenderer
+            .invoke('save-chat-conversation', {
+              sessionId: sessionIdRef.current,
+              problem: problemRef.current,
+              messages: messagesRef.current,
+            })
+            .catch(() => {});
+        }
         sessionIdRef.current = sessionId;
         setMessages([]);
         setRatings({});
+        setInput('');
+        setPendingImages([]);
+        setSending(false);
+        pendingContextRef.current = null;
+        setPendingContextLabel(null);
+        window.electron?.ipcRenderer
+          .invoke('get-chat-conversations')
+          .then((saved: unknown) => {
+            if (sessionIdRef.current !== sessionId || !Array.isArray(saved)) {
+              return;
+            }
+            const conversation = (saved as SavedConversation[]).find(
+              (candidate) => candidate.sessionId === sessionId,
+            );
+            if (!conversation) return;
+            setMessages((current) =>
+              current.length === 0
+                ? conversation.messages
+                : [...conversation.messages, ...current],
+            );
+            setProblem(
+              problemStatement?.trim()
+                ? problemStatement
+                : conversation.problem,
+            );
+          })
+          .catch(() => {});
       }
       setProblem(problemStatement ?? '');
+      setReviewing(null);
+      setShowHistory(false);
     });
     return () => { if (typeof cleanup === 'function') cleanup(); };
   }, []);
@@ -371,10 +772,12 @@ export default function SessionChatView() {
         const next = {
           scenario: typeof p.tutorScenario === 'string' ? p.tutorScenario : 'everyday_support',
           aiTools: Array.isArray(p.aiTools) ? p.aiTools : [],
+          hideAvatar: p.hideAvatar === true,
         };
         setProfile(next);
         setEditScenario(next.scenario);
         setEditTools(next.aiTools);
+        setEditHideAvatar(next.hideAvatar);
       })
       .catch(() => {});
   }, []);
@@ -408,9 +811,14 @@ export default function SessionChatView() {
     const res = await window.electron?.ipcRenderer.invoke('update-settings', {
       scenario: editScenario,
       aiTools: editTools,
+      hideAvatar: editHideAvatar,
     });
     if ((res as { success?: boolean })?.success) {
-      setProfile({ scenario: editScenario, aiTools: editTools });
+      setProfile({
+        scenario: editScenario,
+        aiTools: editTools,
+        hideAvatar: editHideAvatar,
+      });
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     }
@@ -418,6 +826,7 @@ export default function SessionChatView() {
 
   const dirty =
     editScenario !== profile.scenario ||
+    editHideAvatar !== profile.hideAvatar ||
     editTools.length !== profile.aiTools.length ||
     editTools.some((t) => !profile.aiTools.includes(t));
 
@@ -444,11 +853,23 @@ export default function SessionChatView() {
   };
   const memoryDirty = memoryDraft !== memoryLoaded;
 
-  // "Help me with this" seed — auto-send the observation as the first message.
+  // Context from proactive support. Ordinary "Help me with this" requests are
+  // sent immediately; "Chat about it" only stages the context for the user's
+  // next message and therefore does not invoke the tutor yet.
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on('help-request', (data: any) => {
-      const { rawObservation, phrase } = (data ?? {}) as { rawObservation?: string; phrase?: string };
+      const { rawObservation, phrase, label, deferUntilUserMessage } = (data ?? {}) as {
+        rawObservation?: string;
+        phrase?: string;
+        label?: string;
+        deferUntilUserMessage?: boolean;
+      };
       const seed = (rawObservation || phrase || '').trim();
+      if (seed && deferUntilUserMessage) {
+        pendingContextRef.current = seed;
+        setPendingContextLabel((phrase || label || 'Tutor suggestion').trim());
+        return;
+      }
       if (seed) sendMessage(seed, []);
     });
     return () => { if (typeof cleanup === 'function') cleanup(); };
@@ -483,13 +904,93 @@ export default function SessionChatView() {
   };
 
   const handleSend = () => {
-    if (sending) return;
+    if (sending || startingNewSession) return;
     const imgs = pendingImages;
     const text = input;
     setInput('');
     setPendingImages([]);
+    if (reviewing) {
+      const conversation = reviewing;
+      setSending(true);
+      window.electron?.ipcRenderer
+        .invoke('resume-chat-conversation', {
+          sessionId: conversation.sessionId,
+        })
+        .then((result: any) => {
+          if (!result?.success) {
+            setInput(text);
+            setPendingImages(imgs);
+            setSending(false);
+            return;
+          }
+          sessionIdRef.current = conversation.sessionId;
+          setProblem(conversation.problem);
+          setMessages(conversation.messages);
+          setRatings({});
+          setReviewing(null);
+          setShowHistory(false);
+          setSending(false);
+          sendMessage(text, imgs);
+        })
+        .catch(() => {
+          setInput(text);
+          setPendingImages(imgs);
+          setSending(false);
+        });
+      return;
+    }
     sendMessage(text, imgs);
   };
+
+  const handleNewSession = async () => {
+    if (sending || startingNewSession) return;
+    setStartingNewSession(true);
+    try {
+      await window.electron?.ipcRenderer.invoke('start-new-chat-session', {
+        problemStatement: problem,
+      });
+    } finally {
+      setStartingNewSession(false);
+    }
+  };
+
+  const openHistory = async () => {
+    setShowSettings(false);
+    setReviewing(null);
+    setShowHistory(true);
+    setHistoryLoading(true);
+    setHistoryError(false);
+    try {
+      const saved = await window.electron?.ipcRenderer.invoke(
+        'get-chat-conversations',
+      );
+      setConversations(
+        (Array.isArray(saved) ? saved : []).filter(
+          (conversation: SavedConversation) =>
+            conversation.sessionId !== sessionIdRef.current,
+        ),
+      );
+    } catch {
+      setHistoryError(true);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const conversationTitle = (conversation: SavedConversation) =>
+    conversation.title || conversation.problem || 'General help session';
+
+  const conversationPreview = (conversation: SavedConversation) =>
+    conversation.messages.find((message) => message.text.trim())?.text ||
+    'No messages';
+
+  const formatConversationDate = (timestamp: number) =>
+    new Date(timestamp).toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -498,7 +999,16 @@ export default function SessionChatView() {
     }
   };
 
-  const canSend = !sending && (input.trim().length > 0 || pendingImages.length > 0);
+  const canSend =
+    !sending &&
+    !startingNewSession &&
+    (input.trim().length > 0 || pendingImages.length > 0);
+  const visibleMessages = reviewing?.messages ?? messages;
+  const hasRunningTool = visibleMessages.some(
+    (message) =>
+      message.role === 'tutor' &&
+      message.toolCalls?.some((call) => call.status === 'running'),
+  );
 
   return (
     <div style={S.root}>
@@ -509,9 +1019,35 @@ export default function SessionChatView() {
         <div style={S.headerBtns}>
           <button
             type="button"
+            style={{
+              ...S.newSessionBtn,
+              ...(sending || startingNewSession ? S.sendBtnDisabled : {}),
+            }}
+            title="Start a new session"
+            aria-label="Start a new session"
+            disabled={sending || startingNewSession}
+            onClick={handleNewSession}
+          >
+            {startingNewSession ? 'Starting…' : '+ New'}
+          </button>
+          <button
+            type="button"
+            style={{ ...S.iconBtn, ...(showHistory ? S.iconBtnActive : {}) }}
+            title="Review past conversations"
+            aria-label="Review past conversations"
+            onClick={openHistory}
+          >
+            ◷
+          </button>
+          <button
+            type="button"
             style={{ ...S.iconBtn, ...(showSettings ? S.iconBtnActive : {}) }}
             title="Settings"
-            onClick={() => setShowSettings((v) => !v)}
+            onClick={() => {
+              setShowHistory(false);
+              setReviewing(null);
+              setShowSettings((v) => !v);
+            }}
           >
             ⚙
           </button>
@@ -534,6 +1070,25 @@ export default function SessionChatView() {
 
       {showSettings && (
         <div style={S.settings}>
+          <div style={S.groupLabel}>Desktop</div>
+          <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
+            <input
+              id="hide-desktop-avatar"
+              type="checkbox"
+              checked={editHideAvatar}
+              onChange={(e) => setEditHideAvatar(e.target.checked)}
+            />
+            <span>
+              <strong style={S.toggleTitle}>Hide desktop avatar</strong>
+              <span style={S.toggleHelp}>
+                Keep Coco in the system tray and show proactive suggestions as
+                notifications.
+              </span>
+            </span>
+          </label>
+
+          <div style={S.sectionDivider} />
+
           <div style={S.groupLabel}>Agent mode</div>
           <div style={S.chips}>
             {MODE_OPTIONS.map((m) => (
@@ -672,17 +1227,85 @@ export default function SessionChatView() {
         </div>
       )}
 
-      {problem && <div style={S.problem}>Task: {problem}</div>}
+      {(!showHistory || reviewing) && (reviewing?.problem || problem) && (
+        <div style={S.problem}>Task: {reviewing?.problem || problem}</div>
+      )}
 
-      <div style={S.list} ref={listRef}>
-        {messages.length === 0 && !sending && (
+      {showHistory && !reviewing ? (
+        <div style={S.historyPanel}>
+          <div style={S.historyPanelHeader}>
+            <span style={S.historyTitle}>Past conversations</span>
+            <button
+              type="button"
+              style={{ ...S.historyBack, marginLeft: 'auto' }}
+              onClick={() => setShowHistory(false)}
+            >
+              Back to chat
+            </button>
+          </div>
+          <div style={S.historyList}>
+            {historyLoading && (
+              <div style={S.empty}>Loading conversations…</div>
+            )}
+            {!historyLoading && historyError && (
+              <div style={S.empty}>
+                Conversation history could not be loaded.
+              </div>
+            )}
+            {!historyLoading && !historyError && conversations.length === 0 && (
+              <div style={S.empty}>
+                Your past conversations will appear here.
+              </div>
+            )}
+            {!historyLoading &&
+              conversations.map((conversation) => (
+                <button
+                  key={conversation.sessionId}
+                  type="button"
+                  style={S.historyItem}
+                  onClick={() => setReviewing(conversation)}
+                >
+                  <span style={S.historyItemTitle}>
+                    {conversationTitle(conversation)}
+                  </span>
+                  <span style={S.historyItemMeta}>
+                    {formatConversationDate(conversation.updatedAt)}
+                    {' · '}
+                    {conversation.messages.length}{' '}
+                    {conversation.messages.length === 1
+                      ? 'message'
+                      : 'messages'}
+                  </span>
+                  <span style={S.historyItemPreview}>
+                    {conversationPreview(conversation)}
+                  </span>
+                </button>
+              ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          {reviewing && (
+            <div style={S.reviewBanner}>
+              <span>Viewing a past conversation</span>
+              <button
+                type="button"
+                style={{ ...S.historyBack, marginLeft: 'auto' }}
+                onClick={() => setReviewing(null)}
+              >
+                Back to history
+              </button>
+            </div>
+          )}
+          <div style={S.list} ref={listRef}>
+        {visibleMessages.length === 0 && !sending && (
           <div style={S.empty}>
             Ask Coco about your task, an AI tool, or anything else.
             <br />
             You can paste a screenshot to show what you&apos;re working on.
           </div>
         )}
-        {messages.map((m, i) => (
+        {visibleMessages.map((m, i) => (
           // eslint-disable-next-line react/no-array-index-key
           <div key={i} style={m.role === 'user' ? S.userRow : S.tutorRow}>
             {m.role === 'user' ? (
@@ -701,9 +1324,41 @@ export default function SessionChatView() {
               <>
                 <div style={S.tutorAvatar}>C</div>
                 <div>
-                  <div style={m.isError ? S.errBubble : S.tutorBubble}>
-                    {m.isError ? m.text : <TutorMessage text={m.text} />}
-                  </div>
+                  {m.toolCalls && m.toolCalls.length > 0 && (
+                    <div style={S.toolStack}>
+                      {m.toolCalls.map((call) => (
+                        <ToolCallCard key={call.id} call={call} />
+                      ))}
+                    </div>
+                  )}
+                  {(m.text || m.isError) && (
+                    <div style={m.isError ? S.errBubble : S.tutorBubble}>
+                      {m.isError ? (
+                        <>
+                          <div>{m.text}</div>
+                          {m.retryText !== undefined && (
+                            <button
+                              type="button"
+                              style={{
+                                ...S.retryBtn,
+                                ...(sending || startingNewSession ? S.sendBtnDisabled : {}),
+                              }}
+                              disabled={sending || startingNewSession}
+                              onClick={() => retryMessage(m)}
+                            >
+                              Retry
+                            </button>
+                          )}
+                        </>
+                      ) : <TutorMessage text={m.text} />}
+                    </div>
+                  )}
+                  {!m.isError && (
+                    <ChatMetrics
+                      observerMetrics={m.observerMetrics}
+                      tutorMetrics={m.tutorMetrics}
+                    />
+                  )}
                   {!m.isError && m.id && (
                     <div style={S.feedbackRow}>
                       {(['up', 'down'] as const).map((dir) => (
@@ -733,10 +1388,31 @@ export default function SessionChatView() {
             )}
           </div>
         ))}
-        {sending && <div style={S.typing}>Coco is thinking…</div>}
+        {sending && !hasRunningTool && (
+          <div style={S.typing}>Coco is thinking…</div>
+        )}
       </div>
 
       <div style={S.composer}>
+        {pendingContextLabel && (
+          <div style={S.pendingContext}>
+            <span style={S.pendingContextText}>
+              Suggestion context attached: {pendingContextLabel}
+            </span>
+            <button
+              type="button"
+              style={S.pendingContextX}
+              aria-label="Remove suggestion context"
+              title="Remove suggestion context"
+              onClick={() => {
+                pendingContextRef.current = null;
+                setPendingContextLabel(null);
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
         {pendingImages.length > 0 && (
           <div style={S.pending}>
             {pendingImages.map((src, i) => (
@@ -777,6 +1453,8 @@ export default function SessionChatView() {
           Press <span style={S.hotkeyKbd}>{HOTKEY_LABEL}</span> anytime to grab a screenshot
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

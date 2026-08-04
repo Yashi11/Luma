@@ -31,6 +31,8 @@ from pathlib import Path
 
 import httpx
 from external_api.llm import chat_completion
+from external_api.types import LLMCallMetrics
+from memory import MemoryEngine, ObservationInput
 from py_utils.logging import init_logger
 from py_utils.training_recorder import TrainingRecorder
 from sensing.language import ActionNode, SequenceNode, annotate_high_level_nodes
@@ -73,7 +75,9 @@ def _load_observer_prompt(scenario: str = "everyday_support") -> str:
     prompt_dir = {
         "student_learning": "prompts_problem_solving",
     }.get(scenario, "prompts_everyday")
-    return (Path(__file__).parent / prompt_dir / "observer.txt").read_text(encoding="utf-8")
+    return (Path(__file__).parent / prompt_dir / "observer.txt").read_text(
+        encoding="utf-8"
+    )
 
 
 def _custom_observer_prompt_path() -> Path:
@@ -143,7 +147,7 @@ def _observe(
     model: str,
     system_prompt: str = _OBSERVER_PROMPT,
     max_tokens: int = 4096,
-) -> str:
+) -> tuple[str, LLMCallMetrics]:
     """Generate an observer response."""
     # user_content: list[TextContent | ImageURLContent] = []
 
@@ -181,23 +185,33 @@ def _observe(
         image_paths=image_paths,
     )
 
-    result, _ = chat_completion(
-        messages=messages,
-        model=model,
-        max_tokens=max_tokens,
-    )
+    completion_kwargs = {
+        "messages": messages,
+        "model": model,
+        "max_tokens": max_tokens,
+        "operation": "observer",
+    }
+    if model.startswith("hosted_vllm/"):
+        completion_kwargs["extra_body"] = {
+            "chat_template_kwargs": {"enable_thinking": False}
+        }
+        hosted_model = model.removeprefix("hosted_vllm/").lower()
+        if hosted_model.startswith("thinkingmachines/inkling"):
+            completion_kwargs["reasoning_effort"] = "none"
+
+    result, metrics = chat_completion(**completion_kwargs)
 
     if isinstance(result.content, str):
-        return result.content
+        return result.content, metrics
 
     if isinstance(result.content, list):
         for block in result.content:
             if isinstance(block, dict) and block.get("type") == "text":
-                return block.get("text", "")
+                return block.get("text", ""), metrics
             if hasattr(block, "text"):
-                return block.text  # type: ignore
+                return block.text, metrics  # type: ignore
 
-    return ""
+    return "", metrics
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +236,17 @@ def _extract_json_block(text: str) -> str | None:
 # Sentinel strings the observer prompts emit when nothing's wrong. Compared
 # case-insensitively against the field value after stripping punctuation.
 _STUCK_NEGATIVE = {"not stuck", ""}
-_MISTAKE_NEGATIVE = {"no mistake so far", "no mistake", ""}
-_INEFFICIENCY_NEGATIVE = {"no inefficiency detected", ""}
+_MISTAKE_NEGATIVE = {
+    "no mistake so far",
+    "no mistake",
+    "no human mistake detected",
+    "",
+}
+_INEFFICIENCY_NEGATIVE = {
+    "no inefficiency detected",
+    "no delegation opportunity",
+    "",
+}
 _AI_NEGATIVE = {"no ai interaction problem", ""}
 
 # How long to suppress repeated pre-session task-suggestion events (seconds).
@@ -253,6 +276,7 @@ def _extract_task_label(observation: str) -> str | None:
 
 _EXPLICIT_STATUS_VALUES = {
     "progress",
+    "mistake",
     "inefficient",
     "ai_struggle",
     "stuck",
@@ -270,14 +294,14 @@ def _classify_observation_status(
         "stuck"          — student-learning ``stuck`` field reported being stuck
         "mistake"        — student-learning ``mistakes`` field reported a mistake
         "inefficient"    — worker-upskilling inefficiency pattern detected
-        "ai_struggle"    — worker-upskilling AI-tool interaction problem detected
+        "ai_struggle"    — legacy worker-upskilling AI-tool problem detected
         "task_complete"  — observer judged the task to be finished (session active only)
         "observing"      — couldn't parse / no scenario fields recognized
 
     For the worker scenario the observer now emits an explicit ``status`` field
-    (one of "progress", "inefficient", "ai_struggle", "stuck", "observing").
+    (one of "progress", "mistake", "inefficient", "stuck", "observing").
     We use that directly when present so we don't have to re-infer from
-    ``inefficiency_patterns`` / ``ai_interaction_problems``. The inference path
+    ``inefficiency_patterns`` / ``mistake_made_by_human``. The inference path
     is kept as a fallback for older observer outputs without the field.
 
     The renderer uses this to pick a friendly phrase from a pool — the raw
@@ -322,13 +346,21 @@ def _classify_observation_status(
         return explicit
 
     # 2. Legacy inference path — kept for backward-compat with older observer outputs.
+    human_mistake = _norm(obj.get("mistake_made_by_human"))
+    if human_mistake and human_mistake not in _MISTAKE_NEGATIVE:
+        return "mistake"
+    # Compatibility with observations recorded before the field was renamed.
     ai_problems = _norm(obj.get("ai_interaction_problems"))
     if ai_problems and ai_problems not in _AI_NEGATIVE:
         return "ai_struggle"
     inefficiency = _norm(obj.get("inefficiency_patterns"))
     if inefficiency and inefficiency not in _INEFFICIENCY_NEGATIVE:
         return "inefficient"
-    if not (obj.get("inefficiency_patterns") or obj.get("ai_interaction_problems")):
+    if not (
+        obj.get("inefficiency_patterns")
+        or obj.get("mistake_made_by_human")
+        or obj.get("ai_interaction_problems")
+    ):
         return "observing"
     return "progress"
 
@@ -547,6 +579,7 @@ class AiTutoringProcessor(SegmentProcessor):
         *,
         observer_model: str,
         scenario: str = "everyday_support",
+        memory_engine: MemoryEngine | None = None,
     ) -> None:
         self._http_client = http_client
         self.tutor_url = tutor_url.rstrip("/")
@@ -555,6 +588,8 @@ class AiTutoringProcessor(SegmentProcessor):
         self._image_num: int = 0
         self._observer_model = observer_model
         self._scenario = scenario
+        self._memory_engine = memory_engine
+        self._memory_session_id: str | None = None
         # Per-session observer prompt (can be updated via set_scenario).
         self._observer_prompt: str = _load_observer_prompt(scenario)
         # Ring buffer of recent observer outputs for the text-only progress
@@ -567,10 +602,12 @@ class AiTutoringProcessor(SegmentProcessor):
         # observation_id of the most recent observer call, so the judge can
         # reference the fresh "progress_check" observation it just triggered.
         self._last_observation_id: str | None = None
+        # Screenshot retained briefly for the eager instant-suggestion request.
+        self._last_observation_image_paths: list[str] = []
         # observation_id -> user reaction ("shown" | "engage" | "dismiss" |
         # "thumbs_up" | "thumbs_down"), updated from POST /feedback. Injected
-        # back into the observer prompt so it doesn't re-raise a suggestion the
-        # user just dismissed.
+        # back into the observer prompt so it doesn't re-raise suggestions the
+        # user dismissed or rated negatively.
         self._reactions: dict[str, str] = {}
         # Live subscribers (e.g. SSE clients on the Electron UI) that receive
         # every observation as it is produced.
@@ -599,6 +636,7 @@ class AiTutoringProcessor(SegmentProcessor):
         *,
         observer_model: str,
         scenario: str = "everyday_support",
+        memory_engine: MemoryEngine | None = None,
     ) -> AiTutoringProcessor:
         """Build an ``AiTutoringProcessor`` from high-level config values.
 
@@ -615,7 +653,11 @@ class AiTutoringProcessor(SegmentProcessor):
             snapshot_buffer_max_size=snapshot_buffer_max_size,
             observer_model=observer_model,
             scenario=scenario,
+            memory_engine=memory_engine,
         )
+
+    def set_memory_session(self, session_id: str | None) -> None:
+        self._memory_session_id = session_id
 
     async def set_scenario(
         self, scenario: str, custom_observer_prompt: str | None = None
@@ -695,7 +737,12 @@ class AiTutoringProcessor(SegmentProcessor):
             self._obs_subscribers.remove(q)
 
     def _broadcast_observation(
-        self, type_: str, observation: str, observation_id: str | None = None
+        self,
+        type_: str,
+        observation: str,
+        observation_id: str | None = None,
+        llm_metrics: dict | None = None,
+        image_paths: list[str] | None = None,
     ) -> None:
         if not self._obs_subscribers:
             return
@@ -732,6 +779,10 @@ class AiTutoringProcessor(SegmentProcessor):
         }
         if observation_id:
             event["observation_id"] = observation_id
+        if image_paths:
+            event["image_paths"] = image_paths
+        if llm_metrics is not None:
+            event["llm_metrics"] = llm_metrics
         if task_label:
             event["task_label"] = task_label
         if applying_ai_output is not None:
@@ -748,7 +799,12 @@ class AiTutoringProcessor(SegmentProcessor):
                 except (asyncio.QueueEmpty, asyncio.QueueFull):
                     pass
 
-    def broadcast_invite(self, observation: str, task_label: str) -> None:
+    def broadcast_invite(
+        self,
+        observation: str,
+        task_label: str,
+        image_paths: list[str] | None = None,
+    ) -> None:
         """Emit a pre-session invite as a ``task_suggested`` observation event.
 
         Called by the ProgressDetector when the judge decides to proactively
@@ -764,6 +820,8 @@ class AiTutoringProcessor(SegmentProcessor):
             "scenario": self._scenario,
             "task_label": task_label,
         }
+        if image_paths:
+            event["image_paths"] = image_paths
         for q in self._obs_subscribers:
             try:
                 q.put_nowait(event)
@@ -845,7 +903,7 @@ class AiTutoringProcessor(SegmentProcessor):
         image_path: str | None = None,
         timestamp: str | None = None,
         hotkey_image_paths: list[str] | None = None,
-    ) -> str:
+    ) -> tuple[str, LLMCallMetrics]:
         """Add an optional snapshot then generate and return an observation string.
 
         Called by ``sensing_server``'s ``/observe/user_prompt`` endpoint so
@@ -859,11 +917,11 @@ class AiTutoringProcessor(SegmentProcessor):
         """
         if image_path and timestamp:
             self._add_snapshot(image_path, timestamp)
-        obs, _ = await self._handle_observation(
+        obs, _, metrics = await self._handle_observation(
             type=type, user_text=user_text, hotkey_image_paths=hotkey_image_paths
         )
         self._log(f"[{type.upper()} OBSERVATION (generate_observation)] {obs}\n")
-        return obs
+        return obs, metrics
 
     async def configure_session(self) -> None:
         """Reset per-session observer state for a new tutor session.
@@ -937,7 +995,7 @@ class AiTutoringProcessor(SegmentProcessor):
         )
         if image_path and timestamp:
             self._add_snapshot(image_path, timestamp)
-        obs, _ = await self._handle_observation(
+        obs, _text, _metrics = await self._handle_observation(
             type="user_prompt",
             user_text=user_text,
             hotkey_image_paths=hotkey_image_paths,
@@ -955,7 +1013,7 @@ class AiTutoringProcessor(SegmentProcessor):
             return
         self._add_snapshot(image_path, timestamp)
         if len(self.snapshot_buffer.buffer) >= self.snapshot_buffer.max_size:
-            obs, _ = await self._handle_observation(type="snapshot")
+            obs, _text, _metrics = await self._handle_observation(type="snapshot")
             self._log(f"[SNAPSHOT OBSERVATION] {obs}\n")
             self.snapshot_buffer.obs_history.append(obs)
             self.snapshot_buffer.buffer.clear()
@@ -968,7 +1026,7 @@ class AiTutoringProcessor(SegmentProcessor):
         print(f"[HANDLE PAUSE] image_path: {image_path}, timestamp: {timestamp}")
         if image_path and timestamp:
             self._add_snapshot(image_path, timestamp)
-        obs, text = await self._handle_observation(type="pause")
+        obs, text, metrics = await self._handle_observation(type="pause")
         self._log(f"[PAUSE OBSERVATION] {obs}\n")
 
         payload = {
@@ -976,6 +1034,7 @@ class AiTutoringProcessor(SegmentProcessor):
                 "data_type": "pause_detected",
                 "observation": obs,
                 "text": text,
+                "llm_metrics": metrics,
             }
         }
         self.broadcast_pause(payload)
@@ -992,7 +1051,7 @@ class AiTutoringProcessor(SegmentProcessor):
         user_text: str | None = None,
         type: str | None = None,
         hotkey_image_paths: list[str] | None = None,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, LLMCallMetrics]:
         from datetime import datetime as _dt
 
         text = await self._build_context_prompt()
@@ -1033,7 +1092,7 @@ class AiTutoringProcessor(SegmentProcessor):
         all_image_paths = snapshot_image_paths + hk_paths
 
         observation_id = uuid.uuid4().hex
-        obs = _observe(
+        obs, metrics = _observe(
             text_prompt,
             all_image_paths,
             system_prompt=self._observer_prompt,
@@ -1053,12 +1112,49 @@ class AiTutoringProcessor(SegmentProcessor):
                 observer_output=obs,
                 model=self._observer_model,
                 screenshot_paths=all_image_paths,
+                llm_metrics=metrics,
             )
+
+        # The observer's semantic output is the raw observation for long-term
+        # GUM memory. Persist quickly; proposition work runs on MemoryEngine's
+        # background task and never delays the live tutor path.
+        if self._memory_engine is not None:
+            try:
+                await self._memory_engine.add_observation(
+                    ObservationInput(
+                        id=observation_id,
+                        content=obs,
+                        created_at=time.time(),
+                        observation_type=type or "unknown",
+                        session_id=self._memory_session_id,
+                        scenario=self._scenario,
+                    )
+                )
+            except Exception as exc:
+                logger.warning(f"Could not persist observation to memory: {exc}")
+
+        # Keep the newest rolling screenshot alive briefly so the desktop can
+        # forward it to the eager instant-suggestion VLM call. Other rolling
+        # screenshots can be removed immediately; hot-key screenshots already
+        # have session-managed lifetimes.
+        suggestion_image_paths = (
+            snapshot_image_paths[-1:] if snapshot_image_paths else hk_paths[-1:]
+        )
+        self._last_observation_image_paths = suggestion_image_paths
+        deferred_cleanup = set(suggestion_image_paths) & set(snapshot_image_paths)
 
         # Delete only the rolling snapshot files — the observer has already
         # base64-encoded them and they are no longer needed.
         # Hot-key screenshots are intentionally excluded from cleanup.
-        self._cleanup_consumed_screenshots(snapshot_image_paths)
+        self._cleanup_consumed_screenshots(
+            [path for path in snapshot_image_paths if path not in deferred_cleanup]
+        )
+        if deferred_cleanup:
+            asyncio.get_running_loop().call_later(
+                60,
+                self._cleanup_consumed_screenshots,
+                list(deferred_cleanup),
+            )
 
         # Record for the progress judge's rolling history. Skip "pause" and
         # "progress_check" events — "pause" is triggered by the judge itself
@@ -1078,9 +1174,13 @@ class AiTutoringProcessor(SegmentProcessor):
         # the observation_id so the UI can echo it back in feedback (engage /
         # dismiss) and we can join the reaction to this exact observation.
         self._broadcast_observation(
-            type or "unknown", obs, observation_id=observation_id
+            type or "unknown",
+            obs,
+            observation_id=observation_id,
+            llm_metrics=metrics,
+            image_paths=suggestion_image_paths,
         )
-        return obs, text
+        return obs, text, metrics
 
     @staticmethod
     def _cleanup_consumed_screenshots(image_paths: list[str]) -> None:
@@ -1135,13 +1235,17 @@ class AiTutoringProcessor(SegmentProcessor):
         "need_help": "user ASKED FOR HELP despite this calm status — a MISSED need (you under-called here)",
         "shown": "shown to user — no response (ignored)",
         "thumbs_up": "user rated the resulting help 👍",
-        "thumbs_down": "user rated the resulting help 👎",
+        "thumbs_down": (
+            "user rated the resulting help as NEGATIVE — classify similar "
+            'observations as "progress"'
+        ),
     }
 
     def _recent_observations_block(self, n: int = 3) -> str:
         """Build an in-context block of the last ``n`` observations + reactions.
 
-        Lets the observer avoid re-raising a suggestion the user just dismissed.
+        Lets the observer avoid re-raising a suggestion the user just dismissed
+        or rated negatively.
         Returns an empty string when there is no prior observation.
         """
         recent = self.recent_observations(n)
@@ -1151,10 +1255,11 @@ class AiTutoringProcessor(SegmentProcessor):
         lines = [
             "<recent_observations>",
             "Your last few observations and how the user reacted to the bubble each "
-            "one triggered. Do NOT re-raise a suggestion the user just DISMISSED "
-            "unless the situation has materially changed — for the same ongoing "
-            'activity, prefer a calmer status ("progress"/"observing") instead of '
-            'repeating an "inefficient"/"ai_struggle"/"stuck" flag.',
+            "one triggered. Do NOT re-raise a suggestion the user just DISMISSED. "
+            "A NEGATIVE rating means the resulting help was not useful: classify "
+            'similar observations as "progress". Only re-flag after a dismissal or '
+            "negative rating if the situation has materially changed (a new task, "
+            "new app, or genuinely different issue or opportunity).",
         ]
         for i, entry in enumerate(recent, start=1):
             age = max(0.0, now - float(entry.get("ts", now)))

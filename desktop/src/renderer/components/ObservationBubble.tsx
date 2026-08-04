@@ -44,11 +44,24 @@ function truncatePreview(text: string): string {
   return `${text.slice(0, end)}…`;
 }
 
+function formatMetricTokens(n?: number): string {
+  if (typeof n !== 'number') return '0';
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+function formatMetricLatency(ms?: number): string {
+  if (typeof ms !== 'number') return '0s';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
 export default function ObservationBubble({
   bubble,
   onHelpMe,
   onDismiss,
   onViewConversation,
+  onChatAboutSuggestion,
   onMouseEnter,
   onMouseLeave,
 }: {
@@ -56,6 +69,7 @@ export default function ObservationBubble({
   onHelpMe?: () => void;
   onDismiss?: () => void;
   onViewConversation?: () => void;
+  onChatAboutSuggestion?: () => void;
   /** Hovering pauses the auto-hide so the user can read / copy the bubble. */
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -130,6 +144,11 @@ export default function ObservationBubble({
       latency_s: (Date.now() - suggestionShownAt.current) / 1000,
       text: suggestion.copyText ?? null,
     });
+    window.electron?.ipcRenderer.sendMessage('activity-support-rated', {
+      observationId: bubble?.observationId ?? null,
+      rating: dir,
+      ratedAt: Math.floor(Date.now() / 1000),
+    });
     showToast('Thanks for the feedback');
   };
 
@@ -189,18 +208,62 @@ export default function ObservationBubble({
         <div className="observation-bubble-text">{phrase}</div>
       )}
 
+      {suggestion?.llm_metrics && (
+        <div className="bubble-metrics-row">
+          <span>
+            {formatMetricTokens(
+              suggestion.llm_metrics.input_tokens ??
+                suggestion.llm_metrics.prompt_tokens,
+            )}{' '}
+            in
+          </span>
+          <span>
+            {formatMetricTokens(
+              suggestion.llm_metrics.output_tokens ??
+                suggestion.llm_metrics.completion_tokens,
+            )}{' '}
+            out
+          </span>
+          <span>{formatMetricLatency(suggestion.llm_metrics.duration_ms)}</span>
+        </div>
+      )}
+
       {/* Revealed instant suggestion. `content` → one Copy button. `delegate` →
           Copy prompt plus one Open button per the user's chatbots/agents so
           they pick where to hand the prompt. */}
       {suggestion && suggestion.kind === 'content' && (
-        <button type="button" className="bubble-action-btn" onClick={() => act(null)}>
-          Copy
-        </button>
+        <div className="bubble-tool-actions">
+          <button
+            type="button"
+            className="bubble-action-btn"
+            onClick={() => act(null)}
+          >
+            Copy
+          </button>
+          <button
+            type="button"
+            className="bubble-action-btn bubble-chat-action"
+            onClick={onChatAboutSuggestion}
+          >
+            Chat about it
+          </button>
+        </div>
       )}
       {suggestion && suggestion.kind === 'delegate' && (
         <div className="bubble-tool-actions">
-          <button type="button" className="bubble-action-btn" onClick={() => act(null)}>
+          <button
+            type="button"
+            className="bubble-action-btn"
+            onClick={() => act(null)}
+          >
             Copy prompt
+          </button>
+          <button
+            type="button"
+            className="bubble-action-btn bubble-chat-action"
+            onClick={onChatAboutSuggestion}
+          >
+            Chat about it
           </button>
           {(suggestion.availableTools ?? []).map((t) => (
             <button

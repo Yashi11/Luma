@@ -11,7 +11,10 @@ export type Channels =
   | 'open-main-window'
   | 'close-main-window'
   | 'notification'
+  | 'notification-hover-state'
+  | 'set-notification-expanded'
   | 'observation-update'
+  | 'system-suspend'
   | 'shell-show-item-in-finder'
   | 'download-benchmark-file'
   | 'get-benchmark-files'
@@ -28,7 +31,12 @@ export type Channels =
   | 'proactive-session-end-confirmed'
   // Local chat (SessionChatView) — session context + user turns
   | 'session-init'
+  | 'start-new-chat-session'
   | 'send-chat-message'
+  | 'chat-stream-event'
+  | 'get-chat-conversations'
+  | 'save-chat-conversation'
+  | 'resume-chat-conversation'
   // Hot-key screen capture → preview thumbnail in the chat input bar
   | 'hotkey-capture'
   // Renderer → main: chat's hot-key listener is mounted; flush buffered captures
@@ -44,18 +52,28 @@ export type Channels =
   | 'save-memory'
   // Observation history
   | 'toggle-observation-history'
+  | 'open-observation-history'
+  | 'activity-history-visibility'
+  | 'avatar-renderer-ready'
   // Activity panel hydrates persisted history from main on open
   | 'get-activity-history'
+  // Persist an observation's proactive-support engagement + revealed content
+  | 'activity-support-engaged'
+  // Persist support content/rating independently of initial engagement
+  | 'activity-support-rated'
   // Renderer asks main to resize the avatar window to fit current content
   | 'resize-avatar-window'
   // Tier 3: tutor guidance routed to bubble when webapp is hidden
   | 'tutor-notification'
   // Tier 2: user clicked "Help me with this" in the bubble
   | 'help-me-with-this'
+  | 'open-notification-suggestion'
   // Instant suggestion: fetch the precomputed suggestion for an observation
   | 'get-instant-suggestion'
   // Instant suggestion: act on a revealed suggestion (copy / open tool)
   | 'suggestion-action'
+  // Continue a revealed instant suggestion in Coco's chat
+  | 'chat-about-suggestion'
   // Forwarded to webapp renderer to signal a help-request context
   | 'help-request'
   // Explicit user reaction (bubble engage/dismiss) → sensing /feedback

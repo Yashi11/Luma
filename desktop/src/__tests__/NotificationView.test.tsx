@@ -7,7 +7,7 @@
  *  3. LaTeX rendering via remark-math + rehype-katex
  *  4. LaTeX embedded inside a JSON guidance string (with unescaped backslashes
  *     that the LLM commonly produces)
- *  5. Visualization code-block suppression
+ *  5. Fenced code rendering
  *
  * NOTE: these tests require remark-math@6 (compatible with react-markdown@10).
  * If you see `exitMathText … Cannot set properties of undefined` run:
@@ -15,8 +15,9 @@
  */
 
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { NotificationBubble } from '../renderer/components/NotificationView';
+import type { InstantSuggestion } from '../renderer/components/observation-types';
 
 // ---------------------------------------------------------------------------
 // 1. Plain text / Markdown
@@ -198,26 +199,155 @@ describe('LaTeX inside JSON guidance', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. Visualization code-block suppression
+// 5. Fenced code rendering
 // ---------------------------------------------------------------------------
-describe('visualization code suppression', () => {
-  it('hides python fenced code blocks', () => {
+describe('fenced code rendering', () => {
+  it('shows python fenced code blocks', () => {
     const msg =
       'Here is some guidance.\n\n```python\nimport matplotlib.pyplot as plt\nplt.plot([1,2,3])\n```';
     const { container } = render(<NotificationBubble message={msg} />);
-    expect(container.textContent).not.toContain('import matplotlib');
-    expect(container.textContent).not.toContain('plt.plot');
+    expect(container.textContent).toContain('import matplotlib');
+    expect(container.textContent).toContain('plt.plot');
+    expect(container.querySelector('code.language-python')).toBeInTheDocument();
   });
 
-  it('hides py fenced code blocks', () => {
+  it('shows py fenced code blocks', () => {
     const msg = 'Guidance text.\n\n```py\nprint("hello")\n```';
     const { container } = render(<NotificationBubble message={msg} />);
-    expect(container.textContent).not.toContain('print("hello")');
+    expect(container.textContent).toContain('print("hello")');
+    expect(container.querySelector('code.language-py')).toBeInTheDocument();
   });
 
   it('still shows inline code that is not a viz block', () => {
     const msg = 'Try calling `train()` first.';
     render(<NotificationBubble message={msg} />);
     expect(screen.getByText('train()')).toBeInTheDocument();
+  });
+});
+
+describe('instant suggestion actions', () => {
+  const contentSuggestion: InstantSuggestion = {
+    kind: 'content',
+    title: 'Try a smaller example',
+    body: 'Reduce the input before debugging the full workflow.',
+    copyText: 'Reduce the input before debugging the full workflow.',
+  };
+
+  it('previews only the title before the full suggestion is revealed', () => {
+    const onReveal = jest.fn();
+    const { container } = render(
+      <NotificationBubble
+        message={contentSuggestion.title}
+        actionLabel="Reveal full suggestion"
+        notifType="proactive-suggestion"
+        suggestion={contentSuggestion}
+        onAction={onReveal}
+        adjustable
+      />,
+    );
+
+    expect(screen.getByText(contentSuggestion.title)).toBeInTheDocument();
+    expect(screen.getByText('Suggestion')).toBeInTheDocument();
+    expect(
+      container.querySelector('.toast-card--suggestion-preview'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Expand notification' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(contentSuggestion.body!)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Chat about it' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Reveal full suggestion →' }),
+    );
+    expect(onReveal).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers to continue a content suggestion in chat', () => {
+    const onChat = jest.fn();
+    render(
+      <NotificationBubble
+        message="Try a smaller example"
+        actionLabel="Copy"
+        notifType="instant-suggestion"
+        suggestion={contentSuggestion}
+        onChatAboutSuggestion={onChat}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat about it' }));
+    expect(onChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers to continue a delegated suggestion in chat', () => {
+    const onChat = jest.fn();
+    render(
+      <NotificationBubble
+        message="Ask an AI tool"
+        notifType="instant-suggestion"
+        suggestion={{
+          kind: 'delegate',
+          title: 'Ask an AI tool',
+          prompt: 'Explain this error.',
+          copyText: 'Explain this error.',
+          targetTool: 'chatgpt',
+          availableTools: [],
+        }}
+        onChatAboutSuggestion={onChat}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat about it' }));
+    expect(onChat).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('window controls', () => {
+  it('offers expand and collapse controls for an adjustable notification', () => {
+    const onToggleExpanded = jest.fn();
+    const { rerender } = render(
+      <NotificationBubble
+        message="Adjust me"
+        adjustable
+        expanded={false}
+        onToggleExpanded={onToggleExpanded}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Expand notification' }),
+    );
+    expect(onToggleExpanded).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <NotificationBubble
+        message="Adjust me"
+        adjustable
+        expanded
+        onToggleExpanded={onToggleExpanded}
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: 'Collapse notification' }),
+    ).toBeInTheDocument();
+  });
+
+  it('does not show an expand control for a fixed notification', () => {
+    render(<NotificationBubble message="Fixed" />);
+    expect(
+      screen.queryByRole('button', { name: 'Expand notification' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reveals the full message when expanded', () => {
+    const message = `${'Preview text '.repeat(20)}full-message-ending`;
+    const { rerender } = render(
+      <NotificationBubble message={message} adjustable expanded={false} />,
+    );
+    expect(screen.queryByText(/full-message-ending/)).not.toBeInTheDocument();
+
+    rerender(<NotificationBubble message={message} adjustable expanded />);
+    expect(screen.getByText(/full-message-ending/)).toBeInTheDocument();
   });
 });

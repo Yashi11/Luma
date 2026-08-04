@@ -15,7 +15,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from external_api.llm import prompt_to_text
+from external_api.types import LLMCallMetrics
+from proactive_tutor.agents.tutor import TutorAgent
 from proactive_tutor.ai_tool_capabilities import (
     format_tool_names,
     get_capabilities_for_tools,
@@ -61,12 +62,25 @@ def _ai_tools_context_block(ai_tools: list[str]) -> str:
 
 
 def _build_user_prompt(
-    observation: str, task_label: str | None, ai_tools: list[str]
+    observation: str,
+    task_label: str | None,
+    ai_tools: list[str],
+    memory: str = "",
+    has_screenshots: bool = False,
 ) -> str:
     parts: list[str] = []
     if task_label:
         parts.append(f"<task_label>\n{task_label}\n</task_label>")
     parts.append(f"<observation>\n{observation}\n</observation>")
+    if memory:
+        parts.append(f"<memory>\n{memory}\n</memory>")
+    if has_screenshots:
+        parts.append(
+            "<screenshots>\n"
+            "Screenshot image(s) of the user's current screen are attached to "
+            "this message. Use them as the primary visual context.\n"
+            "</screenshots>"
+        )
     tools_block = _ai_tools_context_block(ai_tools)
     if tools_block:
         parts.append(tools_block)
@@ -139,7 +153,24 @@ def generate_instant_suggestion(
     scenario: str,
     ai_tools: list[str],
     model: str,
+    memory: str = "",
+    image_paths: list[str] | None = None,
 ) -> dict:
+    suggestion, _ = generate_instant_suggestion_with_metrics(
+        observation, task_label, scenario, ai_tools, model, memory, image_paths
+    )
+    return suggestion
+
+
+def generate_instant_suggestion_with_metrics(
+    observation: str,
+    task_label: str | None,
+    scenario: str,
+    ai_tools: list[str],
+    model: str,
+    memory: str = "",
+    image_paths: list[str] | None = None,
+) -> tuple[dict, LLMCallMetrics]:
     """Generate a single ready-to-use suggestion for *observation*.
 
     Blocking (performs LLM I/O); call from a thread in async contexts.
@@ -147,6 +178,26 @@ def generate_instant_suggestion(
     ``scenario`` is accepted for parity with the observation event and future
     scenario-specific prompts; the current prompt is scenario-agnostic.
     """
-    user_prompt = _build_user_prompt(observation, task_label, ai_tools or [])
-    raw = prompt_to_text(model, INSTANT_SYSTEM_PROMPT, user_prompt)
-    return _parse_instant_suggestion(raw)
+    user_prompt = _build_user_prompt(
+        observation,
+        task_label,
+        ai_tools or [],
+        memory=memory,
+        has_screenshots=bool(image_paths),
+    )
+    # Instant suggestions may retrieve relevant long-term or recent activity,
+    # but never inspect the live screen: their observation/screenshots were
+    # already captured by the proactive sensing flow.
+    agent = TutorAgent(
+        model,
+        INSTANT_SYSTEM_PROMPT,
+        enable_memory_tool=True,
+        enable_screen_tool=False,
+    )
+    raw, metrics = agent.tutor_with_metrics(
+        user_prompt,
+        image_paths=image_paths,
+        operation="instant_suggestion",
+        max_tool_calls=3,
+    )
+    return _parse_instant_suggestion(raw), metrics

@@ -20,9 +20,12 @@ import {
   clipboard,
   ipcMain,
   globalShortcut,
-  Notification,
+  Menu,
+  Tray,
+  nativeImage,
   dialog,
   screen,
+  powerMonitor,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
@@ -34,12 +37,29 @@ import {
   stopObservationStream,
 } from './services/observation-stream';
 import {
+  consumeTutorStream,
+  TutorStreamTimeoutError,
+} from './services/tutor-stream';
+import type { TutorStreamEvent } from './services/tutor-stream';
+import {
   appendActivity,
   readActivity,
+  recordSupportEngagement,
+  recordSupportRating,
+  recordSupportSuggestion,
   pruneActivity,
 } from './activity-store';
+import {
+  readConversations,
+  saveConversation,
+} from './conversation-store';
+import { ObservationSleepGuard } from './observation-sleep-guard';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
-import type { ObservationStatus, AiToolButton } from '../renderer/components/observation-types';
+import type {
+  ObservationStatus,
+  AiToolButton,
+  LLMCallMetrics,
+} from '../renderer/components/observation-types';
 
 const dotenv = require('dotenv');
 
@@ -90,8 +110,15 @@ class AppUpdater {
 let avatarWindow: BrowserWindow | null = null;
 let chatWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
+let notificationHovered = false;
+let latestHiddenSuggestionObservationId: string | undefined;
 let onboardingWindow: BrowserWindow | null = null;
 let sessionSetupWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+let hideAvatarMode = false;
+let avatarRendererReady = false;
+let pendingOpenHistory = false;
+const observationSleepGuard = new ObservationSleepGuard();
 
 // Hot-key screen captures (Cmd/Ctrl+Shift+Space) waiting to be shown as preview
 // thumbnails in the chat input bar. When the hot key opens a fresh chat window,
@@ -131,6 +158,15 @@ const isOnboardingComplete = (): boolean => {
     const raw = fs.readFileSync(profilePath(), 'utf-8');
     const profile = JSON.parse(raw);
     return profile?.onboardingComplete === true;
+  } catch {
+    return false;
+  }
+};
+
+const readHideAvatarSetting = (): boolean => {
+  try {
+    const profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
+    return profile?.hideAvatar === true;
   } catch {
     return false;
   }
@@ -191,6 +227,7 @@ const createOnboardingWindow = () => {
 
 const createAvatarWindow = () => {
   if (avatarWindow && !avatarWindow.isDestroyed()) return;
+  avatarRendererReady = false;
 
   // Start small (just the pet). The renderer grows the window via
   // 'resize-avatar-window' when a bubble or the history panel becomes visible,
@@ -211,14 +248,19 @@ const createAvatarWindow = () => {
   avatarWindow.loadURL(resolveHtmlPath('index.html'));
 
   avatarWindow.on('ready-to-show', () => {
-    if (process.env.START_MINIMIZED) {
+    if (hideAvatarMode) {
+      avatarWindow?.hide();
+    } else if (process.env.START_MINIMIZED) {
       avatarWindow?.minimize();
     } else {
       avatarWindow?.show();
     }
   });
 
-  avatarWindow.on('closed', () => { avatarWindow = null; });
+  avatarWindow.on('closed', () => {
+    avatarWindow = null;
+    avatarRendererReady = false;
+  });
 
   avatarWindow.webContents.setWindowOpenHandler((edata) => {
     shell.openExternal(edata.url);
@@ -266,6 +308,7 @@ const createChatWindow = () => {
     if (isQuitting) return;
     event.preventDefault();
     chatWindow?.hide();
+    if (hideAvatarMode) return;
     if (!avatarWindow || avatarWindow.isDestroyed()) {
       createAvatarWindow();
     } else {
@@ -298,17 +341,96 @@ const showChatPanel = () => {
   chatWindow.focus();
   // The avatar stays visible alongside the chat panel — never hide it, so the
   // pet is always available and closing the chat can't leave a blank screen.
-  if (avatarWindow && !avatarWindow.isDestroyed() && !avatarWindow.isVisible()) {
+  if (
+    !hideAvatarMode &&
+    avatarWindow &&
+    !avatarWindow.isDestroyed() &&
+    !avatarWindow.isVisible()
+  ) {
     avatarWindow.show();
   }
 };
 
+async function openCoco(): Promise<void> {
+  if (isSessionActive && currentSessionId) {
+    openChatForSession(currentSessionId, pendingTaskLabel || '');
+    return;
+  }
+  const problemStatement = pendingTaskLabel || 'General help session';
+  await createProactiveTutorSession(problemStatement, 120);
+}
+
+function trayIconPath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', 'icon.png')
+    : path.join(__dirname, '../../assets/icon.png');
+}
+
+function createTray(): void {
+  if (tray && !tray.isDestroyed()) return;
+  const image = nativeImage.createFromPath(trayIconPath()).resize({
+    width: 22,
+    height: 22,
+  });
+  tray = new Tray(image);
+  tray.setToolTip('Coco');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: 'Open Chat',
+        click: () => {
+          openCoco().catch((err) => log.warn(`[Tray] Could not open Coco: ${err}`));
+        },
+      },
+      {
+        label: 'Open History',
+        click: () => {
+          openHistory();
+        },
+      },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() },
+    ]),
+  );
+}
+
+function openHistory(): void {
+  pendingOpenHistory = true;
+  if (!avatarWindow || avatarWindow.isDestroyed()) createAvatarWindow();
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  if (!avatarRendererReady) return;
+  pendingOpenHistory = false;
+  avatarWindow.show();
+  avatarWindow.webContents.send('open-observation-history');
+}
+
+function applyAvatarVisibility(hidden: boolean): void {
+  hideAvatarMode = hidden;
+  if (hidden) {
+    avatarWindow?.hide();
+    createTray();
+    return;
+  }
+  tray?.destroy();
+  tray = null;
+  createAvatarWindow();
+  avatarWindow?.show();
+}
+
+interface ChatSeed {
+  phrase: string;
+  label: string;
+  rawObservation: string;
+  /** Attach context to the user's next turn instead of sending immediately. */
+  deferUntilUserMessage?: boolean;
+}
+
 // Open the chat panel for a session, pushing the session context (and an
-// optional observation to auto-send as the first message) once it's loaded.
+// optional observation to send now or attach to the user's next message).
 const openChatForSession = (
   sessionId: string,
   problemStatement: string,
-  seed?: { phrase: string; label: string; rawObservation: string },
+  seed?: ChatSeed,
 ) => {
   const alreadyLoaded = chatWindow && !chatWindow.isDestroyed();
   isFloatMode = true;
@@ -369,12 +491,18 @@ const showSessionSetupWindow = async (taskLabel: string | null) => {
 // is always fully visible and never clipped by the app window edge.
 
 const NOTIF_WIDTH = 360;
-// Markdown bodies render taller than plain text, so allocate more room and
-// let the body itself scroll if guidance overflows. header≈38 + body≈210 + footer≈49.
-const NOTIF_HEIGHT = 300;
+// Keep the card compact; longer Markdown guidance scrolls inside the body.
+const NOTIF_HEIGHT = 220;
+const NOTIF_EXPANDED_WIDTH = 560;
+const NOTIF_EXPANDED_HEIGHT = 520;
 
 type VizState = 'none' | 'success' | 'error';
-type NotifType = 'default' | 'session-start-prompt' | 'session-end-prompt';
+type NotifType =
+  | 'default'
+  | 'proactive-suggestion'
+  | 'instant-suggestion'
+  | 'session-start-prompt'
+  | 'session-end-prompt';
 
 const showNotification = (payload: {
   message: string;
@@ -382,13 +510,30 @@ const showNotification = (payload: {
   vizState?: VizState;
   notifType?: NotifType;
   cancelLabel?: string;
+  observationId?: string;
+  status?: string;
+  rawObservation?: string;
+  suggestion?: InstantSuggestion;
 }) => {
+  if (payload.notifType !== 'proactive-suggestion') {
+    latestHiddenSuggestionObservationId = undefined;
+  }
+  if (
+    notificationHovered &&
+    notificationWindow &&
+    !notificationWindow.isDestroyed()
+  ) {
+    log.info('[Notification] Keeping hovered notification; dropping replacement.');
+    return;
+  }
   // Destroy any existing notification before showing a new one (dedup guard).
+  notificationHovered = false;
   notificationWindow?.destroy();
 
-  const { width: sw } = screen.getPrimaryDisplay().workAreaSize;
-  const x = sw - NOTIF_WIDTH - 16;
-  const y = 16;
+  const { workArea } = screen.getPrimaryDisplay();
+  const x = workArea.x + workArea.width - NOTIF_WIDTH - 16;
+  const y = workArea.y + 16;
+  const adjustable = hideAvatarMode;
 
   notificationWindow = new BrowserWindow({
     show: false,
@@ -399,7 +544,11 @@ const showNotification = (payload: {
     transparent: true,
     frame: false,
     alwaysOnTop: true,
-    resizable: false,
+    resizable: adjustable,
+    minimizable: false,
+    maximizable: false,
+    minWidth: adjustable ? 320 : undefined,
+    minHeight: adjustable ? 180 : undefined,
     skipTaskbar: true,
     webPreferences: { preload: preloadPath() },
   });
@@ -409,10 +558,16 @@ const showNotification = (payload: {
 
   notificationWindow.on('ready-to-show', () => {
     notificationWindow?.show();
-    notificationWindow?.webContents.send('notification', payload);
+    notificationWindow?.webContents.send('notification', {
+      ...payload,
+      adjustable,
+    });
   });
 
-  notificationWindow.on('closed', () => { notificationWindow = null; });
+  notificationWindow.on('closed', () => {
+    notificationWindow = null;
+    notificationHovered = false;
+  });
 };
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
@@ -475,13 +630,8 @@ ipcMain.on('hotkey-capture-ready', () => {
 // panel; otherwise start a fresh local session so there is a conversation to
 // show (the sensing observer keeps running either way).
 ipcMain.removeAllListeners('open-main-window');
-ipcMain.on('open-main-window', async () => {
-  if (isSessionActive && currentSessionId) {
-    openChatForSession(currentSessionId, pendingTaskLabel || '');
-    return;
-  }
-  const problemStatement = pendingTaskLabel || 'General help session';
-  await createProactiveTutorSession(problemStatement, 120);
+ipcMain.on('open-main-window', () => {
+  openCoco().catch((err) => log.warn(`[Chat] Could not open Coco: ${err}`));
 });
 
 // "Help me with this" on a proactive bubble.
@@ -506,6 +656,60 @@ ipcMain.on('help-me-with-this', async (_event, payload: { phrase: string; label:
   }
 });
 
+ipcMain.removeAllListeners('open-notification-suggestion');
+ipcMain.on(
+  'open-notification-suggestion',
+  async (
+    _event,
+    payload: {
+      observationId?: string;
+      status?: string;
+      rawObservation?: string;
+    },
+  ) => {
+    notificationWindow?.destroy();
+    const rawObservation = payload?.rawObservation?.trim() || '';
+    const status = payload?.status || 'observing';
+    const observationId = payload?.observationId;
+    const seed = {
+      phrase: rawObservation,
+      label: status.replace(/_/g, ' '),
+      rawObservation,
+    };
+
+    if (observationId) {
+      recordSupportEngagement(observationId, {
+        engagedAt: Math.floor(Date.now() / 1000),
+        destination: 'conversation',
+      });
+    }
+    const sensingPort = process.env.SENSING_PORT || '8080';
+    axios.post(
+      `http://127.0.0.1:${sensingPort}/feedback`,
+      {
+        kind: 'engage',
+        surface: 'notification',
+        observation_id: observationId ?? null,
+        status,
+        text: rawObservation,
+      },
+      { timeout: 3000 },
+    ).catch((err) => {
+      log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+    });
+
+    if (isSessionActive && currentSessionId) {
+      openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
+    } else {
+      await createProactiveTutorSession(
+        rawObservation || 'General help session',
+        120,
+        seed,
+      );
+    }
+  },
+);
+
 // Forward an explicit user reaction (bubble engage/dismiss) to the sensing
 // server's /feedback endpoint, which logs it into the shared training data.
 ipcMain.removeAllListeners('training-feedback');
@@ -528,6 +732,50 @@ ipcMain.on('notification', (_event, args) => {
     actionLabel: buttonText,
   });
 });
+
+ipcMain.removeAllListeners('notification-hover-state');
+ipcMain.on(
+  'notification-hover-state',
+  (_event, { hovered }: { hovered?: boolean }) => {
+    notificationHovered = hovered === true;
+  },
+);
+
+ipcMain.removeAllListeners('set-notification-expanded');
+ipcMain.on(
+  'set-notification-expanded',
+  (_event, { expanded }: { expanded?: boolean }) => {
+    if (
+      !hideAvatarMode ||
+      !notificationWindow ||
+      notificationWindow.isDestroyed()
+    ) {
+      return;
+    }
+
+    const current = notificationWindow.getBounds();
+    const display = screen.getDisplayMatching(current);
+    const targetWidth = expanded ? NOTIF_EXPANDED_WIDTH : NOTIF_WIDTH;
+    const targetHeight = expanded ? NOTIF_EXPANDED_HEIGHT : NOTIF_HEIGHT;
+    const width = Math.min(targetWidth, display.workArea.width);
+    const height = Math.min(targetHeight, display.workArea.height);
+
+    // Preserve a user-dragged position where possible, while ensuring the
+    // resized notification remains fully reachable on its current display.
+    const x = Math.max(
+      display.workArea.x,
+      Math.min(current.x, display.workArea.x + display.workArea.width - width),
+    );
+    const y = Math.max(
+      display.workArea.y,
+      Math.min(
+        current.y,
+        display.workArea.y + display.workArea.height - height,
+      ),
+    );
+    notificationWindow.setBounds({ x, y, width, height }, true);
+  },
+);
 
 // ── Chat-panel width toggle ────────────────────────────────────────────────────
 // The renderer sends this when the user clicks the expand / collapse button to
@@ -565,6 +813,22 @@ ipcMain.on(
     });
   },
 );
+
+ipcMain.removeAllListeners('activity-history-visibility');
+ipcMain.on(
+  'activity-history-visibility',
+  (_event, { visible }: { visible?: boolean }) => {
+    if (!hideAvatarMode) return;
+    if (visible === true) avatarWindow?.show();
+    else if (visible === false) avatarWindow?.hide();
+  },
+);
+
+ipcMain.removeAllListeners('avatar-renderer-ready');
+ipcMain.on('avatar-renderer-ready', () => {
+  avatarRendererReady = true;
+  if (pendingOpenHistory) openHistory();
+});
 
 // ── Proactive session IPC handlers ────────────────────────────────────────────
 
@@ -647,10 +911,15 @@ interface InstantSuggestion {
   prompt?: string;
   copyText: string;
   availableTools?: AiToolButton[];
+  llm_metrics?: LLMCallMetrics;
 }
 
 const suggestionCache = new Map<string, { ts: number; promise: Promise<InstantSuggestion | null> }>();
 const SUGGESTION_TTL_MS = 5 * 60_000;
+// Model latency can exceed 12 seconds under load. Keep the eager request alive
+// long enough for the notification click to reveal its result instead of
+// incorrectly treating a slow generation as a cache failure and opening Chat.
+const SUGGESTION_REQUEST_TIMEOUT_MS = 60_000;
 // Monotonic counter for synthesizing observation ids on events that lack one.
 let syntheticObsSeq = 0;
 // Statuses that show a "Help me with this" button (mirrors the renderer's
@@ -718,9 +987,12 @@ function precomputeSuggestion(event: {
   status?: string;
   task_label?: string;
   scenario?: string;
-}) {
+  image_paths?: string[];
+}): Promise<InstantSuggestion | null> | undefined {
   const id = event.observation_id;
-  if (!id || suggestionCache.has(id)) return;
+  if (!id) return undefined;
+  const cached = suggestionCache.get(id);
+  if (cached) return cached.promise;
   pruneSuggestionCache();
 
   const { aiTools, scenario } = readProfile();
@@ -732,14 +1004,16 @@ function precomputeSuggestion(event: {
       `http://127.0.0.1:${tutorPort}/suggestion/instant`,
       {
         observation: event.observation ?? '',
+        image_paths: event.image_paths?.length ? event.image_paths : null,
         task_label: event.task_label ?? null,
         scenario: event.scenario || scenario,
         ai_tools: aiTools,
       },
-      { timeout: 12000 },
+      { timeout: SUGGESTION_REQUEST_TIMEOUT_MS },
     )
     .then((resp) => {
       const data = resp.data as InstantSuggestion;
+      recordSupportSuggestion(id, data);
       log.info(`[InstantSuggestion] precompute ready id=${id} kind=${data?.kind} in ${Date.now() - startedAt}ms`);
       return data;
     })
@@ -748,34 +1022,47 @@ function precomputeSuggestion(event: {
       return null;
     });
   suggestionCache.set(id, { ts: Date.now(), promise });
+  return promise;
 }
 
 // Renderer asks for the precomputed suggestion when the user clicks "Help me".
 // Returns a status the renderer uses to decide between instant reveal and the
 // fallback chat flow. Awaits the in-flight promise if it isn't ready yet.
 ipcMain.removeHandler('get-instant-suggestion');
-ipcMain.handle('get-instant-suggestion', async (_event, { observationId }: { observationId?: string }) => {
-  const entry = observationId ? suggestionCache.get(observationId) : undefined;
-  if (!entry) {
-    log.info(`[InstantSuggestion] click: cache MISS id=${observationId ?? '(none)'} — falling back to chat`);
-    return { status: 'missing' };
-  }
-  if (Date.now() - entry.ts > SUGGESTION_TTL_MS) {
-    suggestionCache.delete(observationId!);
-    return { status: 'stale' };
-  }
-  const waitStart = Date.now();
-  const value = await entry.promise;
-  log.info(`[InstantSuggestion] click: cache HIT id=${observationId} (waited ${Date.now() - waitStart}ms for in-flight) -> ${value ? 'ready' : 'error'}`);
-  if (!value) return { status: 'error' };
-  // Attach the user's own tools so a delegate bubble can offer one Open button
-  // per available chatbot/agent (recommended tool first).
-  const suggestion: InstantSuggestion =
-    value.kind === 'delegate'
-      ? { ...value, availableTools: buildAvailableTools(value.targetTool) }
-      : value;
-  return { status: 'ready', suggestion };
-});
+ipcMain.handle(
+  'get-instant-suggestion',
+  async (_event, { observationId }: { observationId?: string }) => {
+    const entry = observationId
+      ? suggestionCache.get(observationId)
+      : undefined;
+    if (!entry) {
+      log.info(
+        `[InstantSuggestion] click: cache MISS id=${observationId ?? '(none)'} — falling back to chat`,
+      );
+      return { status: 'missing' };
+    }
+    if (Date.now() - entry.ts > SUGGESTION_TTL_MS) {
+      suggestionCache.delete(observationId!);
+      return { status: 'stale' };
+    }
+    const waitStart = Date.now();
+    const value = await entry.promise;
+    log.info(
+      `[InstantSuggestion] click: cache HIT id=${observationId} (waited ${Date.now() - waitStart}ms for in-flight) -> ${value ? 'ready' : 'error'}`,
+    );
+    if (!value) {
+      suggestionCache.delete(observationId!);
+      return { status: 'error' };
+    }
+    // Attach the user's own tools so a delegate bubble can offer one Open button
+    // per available chatbot/agent (recommended tool first).
+    const suggestion: InstantSuggestion =
+      value.kind === 'delegate'
+        ? { ...value, availableTools: buildAvailableTools(value.targetTool) }
+        : value;
+    return { status: 'ready', suggestion };
+  },
+);
 
 // Renderer acts on a revealed suggestion: always copy the prompt/content to the
 // clipboard, and — when the user picked a specific tool — launch it (website,
@@ -789,6 +1076,76 @@ ipcMain.on(
   },
 );
 
+// Continue a revealed instant suggestion in Coco's own conversation. Include
+// both the ready-made suggestion and the observation that prompted it so the
+// tutor can discuss, refine, or explain the advice without losing context.
+ipcMain.removeAllListeners('chat-about-suggestion');
+ipcMain.on(
+  'chat-about-suggestion',
+  async (
+    _event,
+    payload: {
+      observationId?: string;
+      status?: string;
+      rawObservation?: string;
+      suggestion?: InstantSuggestion;
+      surface?: 'bubble' | 'notification';
+    },
+  ) => {
+    if (payload?.surface === 'notification') notificationWindow?.destroy();
+
+    const suggestion = payload?.suggestion;
+    if (!suggestion) return;
+    const rawObservation = payload.rawObservation?.trim() || '';
+    const suggestionText =
+      suggestion.kind === 'delegate' ? suggestion.prompt : suggestion.body;
+    const chatSeed = [
+      'I’d like to chat about this suggestion:',
+      `**${suggestion.title}**`,
+      suggestionText || suggestion.copyText,
+      rawObservation ? `Context that prompted it:\n${rawObservation}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    const seed = {
+      phrase: suggestion.title,
+      label: payload.status?.replace(/_/g, ' ') || 'suggestion',
+      rawObservation: chatSeed,
+      deferUntilUserMessage: true,
+    };
+
+    if (payload.observationId) {
+      recordSupportEngagement(payload.observationId, {
+        engagedAt: Math.floor(Date.now() / 1000),
+        suggestion,
+        destination: 'conversation',
+      });
+    }
+    const sensingPort = process.env.SENSING_PORT || '8080';
+    axios
+      .post(
+        `http://127.0.0.1:${sensingPort}/feedback`,
+        {
+          kind: 'engage',
+          surface: payload.surface ?? 'bubble',
+          observation_id: payload.observationId ?? null,
+          status: payload.status ?? 'observing',
+          text: suggestion.copyText ?? suggestionText ?? null,
+        },
+        { timeout: 3000 },
+      )
+      .catch((err) => {
+        log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+      });
+
+    if (isSessionActive && currentSessionId) {
+      openChatForSession(currentSessionId, pendingTaskLabel || '', seed);
+    } else {
+      await createProactiveTutorSession(suggestion.title, 120, seed);
+    }
+  },
+);
+
 // Create a tutor session entirely against the LOCAL servers (no backend). A
 // "session" here is just a fresh conversation on the tutor server plus a
 // configured struggle-detection window on the sensing server. Shared by the
@@ -797,7 +1154,7 @@ ipcMain.on(
 async function createProactiveTutorSession(
   problemStatement: string,
   struggleSeconds: number,
-  seed?: { phrase: string; label: string; rawObservation: string },
+  seed?: ChatSeed,
 ): Promise<string | null> {
   // Read the user's onboarding profile to get their selected AI tools and mode.
   const { aiTools, scenario, customObserverPrompt } = readProfile();
@@ -844,6 +1201,7 @@ async function createProactiveTutorSession(
         node_uuid: sessionId,
         struggle_detection_seconds: struggleSeconds,
         scenario,
+        config_source: 'session_start',
         ...(customObserverPrompt && { custom_observer_prompt: customObserverPrompt }),
       },
       { timeout: 15000 },
@@ -854,6 +1212,99 @@ async function createProactiveTutorSession(
 
   return sessionId;
 }
+
+// Start a fresh conversation directly from the chat header. Reuse the regular
+// session setup path so tutor context, sensing, profile settings, and long-term
+// memory all move to the same new session boundary.
+ipcMain.removeHandler('start-new-chat-session');
+ipcMain.handle(
+  'start-new-chat-session',
+  async (_event, { problemStatement }: { problemStatement?: string } = {}) => {
+    const task =
+      problemStatement?.trim() || pendingTaskLabel || 'General help session';
+    try {
+      const sessionId = await createProactiveTutorSession(task, 120);
+      return { success: Boolean(sessionId), sessionId };
+    } catch (err) {
+      log.warn(
+        `[ProactiveSession] Could not start a new chat session: ${(err as Error).message}`,
+      );
+      return { success: false, error: (err as Error).message };
+    }
+  },
+);
+
+// Chat history is local-only: the renderer persists completed turns here and
+// asks main to rebuild tutor context before continuing an older conversation.
+ipcMain.removeHandler('get-chat-conversations');
+ipcMain.handle('get-chat-conversations', () => readConversations());
+
+ipcMain.removeHandler('save-chat-conversation');
+ipcMain.handle('save-chat-conversation', (_event, payload) => {
+  saveConversation(payload ?? {});
+  return { success: true };
+});
+
+ipcMain.removeHandler('resume-chat-conversation');
+ipcMain.handle(
+  'resume-chat-conversation',
+  async (_event, { sessionId }: { sessionId?: string } = {}) => {
+    const conversation = readConversations().find(
+      (saved) => saved.sessionId === sessionId,
+    );
+    if (!conversation) {
+      return { success: false, error: 'Conversation not found.' };
+    }
+
+    const tutorPort = process.env.TUTOR_PORT || '8081';
+    const tutor = `http://127.0.0.1:${tutorPort}`;
+    const { aiTools, scenario } = readProfile();
+    try {
+      await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
+      await axios.post(
+        `${tutor}/config/scenario`,
+        { scenario },
+        { timeout: 8000 },
+      );
+      await axios.post(
+        `${tutor}/context/problem_statement`,
+        { problem_statement: conversation.problem },
+        { timeout: 8000 },
+      );
+      await axios.post(
+        `${tutor}/context/ai_tools`,
+        { ai_tools: aiTools },
+        { timeout: 8000 },
+      );
+      const savedMemory = readLocalMemory();
+      if (savedMemory) {
+        await axios.post(
+          `${tutor}/context/memory`,
+          { memory: savedMemory },
+          { timeout: 8000 },
+        );
+      }
+      await axios.post(
+        `${tutor}/context/conversation`,
+        {
+          messages: conversation.messages
+            .filter((message) => !message.isError)
+            .map(({ role, text }) => ({ role, text })),
+        },
+        { timeout: 8000 },
+      );
+      currentSessionId = conversation.sessionId;
+      isSessionActive = true;
+      pendingTaskLabel = conversation.problem;
+      return { success: true };
+    } catch (err) {
+      log.warn(
+        `[Chat] Could not resume conversation: ${(err as Error).message}`,
+      );
+      return { success: false, error: (err as Error).message };
+    }
+  },
+);
 
 // User confirmed the task + struggle-time in the session-setup window.
 ipcMain.removeAllListeners('proactive-session-confirmed');
@@ -898,8 +1349,14 @@ function endCurrentSession() {
 ipcMain.removeHandler('send-chat-message');
 ipcMain.handle(
   'send-chat-message',
-  async (_event, { userText, images }: { userText: string; images?: string[] }) => {
-    const sensingPort = process.env.SENSING_PORT || '8080';
+  async (
+    ipcEvent,
+    {
+      requestId,
+      userText,
+      images,
+    }: { requestId: string; userText: string; images?: string[] },
+  ) => {
     const tutorPort = process.env.TUTOR_PORT || '8081';
 
     // Persist any pasted images to temp files for the tutor's vision call.
@@ -917,34 +1374,48 @@ ipcMain.handle(
       }
     }
 
-    // Best-effort screen observation for context (chat still works without it).
-    let observation = '';
     try {
-      const obs = await axios.post(
-        `http://127.0.0.1:${sensingPort}/observe/user_prompt`,
-        { text: userText },
-        { timeout: 30000 },
-      );
-      observation = String(obs.data?.observation ?? '');
-    } catch (err) {
-      log.warn(`[Chat] observe/user_prompt failed: ${(err as Error).message}`);
-    }
-
-    try {
-      const resp = await axios.post(
-        `http://127.0.0.1:${tutorPort}/events/user_prompt`,
+      await consumeTutorStream(
+        `http://127.0.0.1:${tutorPort}/events/user_prompt/stream`,
         {
-          observation,
+          // Current-screen context is now retrieved only when the tutor calls
+          // observe_screen; ordinary chat turns skip the observer entirely.
+          observation: '',
           user_text: userText,
           image_paths: imagePaths.length ? imagePaths : null,
         },
-        { timeout: 120000 },
+        (streamEvent: TutorStreamEvent) => {
+          ipcEvent.sender.send('chat-stream-event', {
+            requestId,
+            ...streamEvent,
+            ...(streamEvent.type === 'done'
+              ? { observerMetrics: streamEvent.observer_metrics ?? null }
+              : {}),
+          });
+        },
+        undefined,
+        {
+          // This is an activity timeout, refreshed by every SSE chunk (including
+          // server keep-alives), plus a separate ceiling for genuinely runaway
+          // tool/model loops.
+          idleMs: 60_000,
+          hardMs: 5 * 60_000,
+        },
       );
-      return { guidance: String(resp.data?.guidance ?? '') };
+      return { streamed: true };
     } catch (err) {
       const ax = err as { response?: { data?: unknown }; message?: string };
-      log.error('[Chat] events/user_prompt failed:', JSON.stringify(ax?.response?.data ?? ax?.message));
-      return { error: 'The tutor could not generate a response. Please try again.' };
+      log.error('[Chat] streaming user prompt failed:', JSON.stringify(ax?.response?.data ?? ax?.message));
+      const error =
+        err instanceof TutorStreamTimeoutError
+          ? 'The tutor took too long to respond. Please retry.'
+          : 'The tutor could not generate a response. Please try again.';
+      ipcEvent.sender.send('chat-stream-event', {
+        requestId,
+        type: 'error',
+        error,
+      });
+      return { error };
     }
   },
 );
@@ -1041,7 +1512,49 @@ ipcMain.handle('get-benchmark-files', async (event, { apiUrl, taskId }) => {
 // 14 days so the contribution strip and today's timeline can both render.
 ipcMain.handle('get-activity-history', async (_event, sinceTs?: number) => {
   const defaultSince = Math.floor(Date.now() / 1000) - 14 * 24 * 3600;
-  return readActivity(typeof sinceTs === 'number' ? sinceTs : defaultSince);
+  return readActivity(typeof sinceTs === 'number' ? sinceTs : defaultSince).map(
+    (record) => {
+      const support = record.proactive_support;
+      if (support?.suggestion || !record.observation_id) return record;
+      const cached = suggestionCache.get(record.observation_id);
+      if (!cached || Date.now() - cached.ts > SUGGESTION_TTL_MS) return record;
+      return {
+        ...record,
+        proactive_support: { ...support, available: true },
+      };
+    },
+  );
+});
+
+ipcMain.removeAllListeners('activity-support-engaged');
+ipcMain.on('activity-support-engaged', (_event, payload) => {
+  const observationId = String(payload?.observationId ?? '');
+  if (!observationId) return;
+  recordSupportEngagement(observationId, {
+    engagedAt:
+      typeof payload?.engagedAt === 'number'
+        ? payload.engagedAt
+        : Math.floor(Date.now() / 1000),
+    suggestion: payload?.suggestion,
+    destination: payload?.destination === 'inline' ? 'inline' : 'conversation',
+  });
+});
+
+ipcMain.removeAllListeners('activity-support-rated');
+ipcMain.on('activity-support-rated', (_event, payload) => {
+  const observationId = String(payload?.observationId ?? '');
+  let rating: 'up' | 'down' | null = null;
+  if (payload?.rating === 'up' || payload?.rating === 'down') {
+    rating = payload.rating;
+  }
+  if (!observationId || !rating) return;
+  recordSupportRating(
+    observationId,
+    rating,
+    typeof payload?.ratedAt === 'number'
+      ? payload.ratedAt
+      : Math.floor(Date.now() / 1000),
+  );
 });
 
 // Update the agent mode + AI tools live from the chat's Settings panel.
@@ -1055,9 +1568,11 @@ ipcMain.handle(
     {
       scenario,
       aiTools,
+      hideAvatar,
     }: {
       scenario: string;
       aiTools: string[];
+      hideAvatar: boolean;
     },
   ) => {
     // 1. Persist into the profile (merged with existing fields). Models are
@@ -1071,11 +1586,15 @@ ipcMain.handle(
       }
       profile.tutorScenario = scenario;
       profile.aiTools = aiTools;
+      profile.hideAvatar = hideAvatar === true;
       fs.writeFileSync(profilePath(), JSON.stringify(profile, null, 2), 'utf-8');
     } catch (err) {
       log.error('[Settings] Failed to persist profile:', err);
       return { success: false, error: String(err) };
     }
+
+    // Apply the desktop presentation immediately; no restart is required.
+    applyAvatarVisibility(hideAvatar === true);
 
     // 2. Apply live to the running servers (best-effort).
     const sensingPort = process.env.SENSING_PORT || '8080';
@@ -1098,6 +1617,7 @@ ipcMain.handle(
             node_uuid: currentSessionId,
             struggle_detection_seconds: 120,
             scenario,
+            config_source: 'settings',
             ...(customObserverPrompt && { custom_observer_prompt: customObserverPrompt }),
           },
           { timeout: 15000 },
@@ -1182,7 +1702,7 @@ const createWindow = async () => {
     // completes or skips onboarding (see 'onboarding-complete' handler).
     createOnboardingWindow();
   } else {
-    createAvatarWindow();
+    applyAvatarVisibility(readHideAvatarSetting());
   }
 
   // Remove this if your app does not use auto updates
@@ -1197,7 +1717,7 @@ const createWindow = async () => {
 app.on('window-all-closed', () => {
   // Respect the OSX convention of having the application in memory even
   // after all windows have been closed
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' && !hideAvatarMode) {
     app.quit();
   }
 });
@@ -1266,6 +1786,16 @@ const startObserver = () => {
     process.env.COCO_USER_DATA_DIR = app.getPath('userData');
     log.info(`[Profile] COCO_USER_DATA_DIR=${process.env.COCO_USER_DATA_DIR}`);
   }
+  // Unlike per-launch training records, GUM memory is intentionally shared
+  // across sessions so the tutor can retrieve older context.
+  if (!process.env.COCO_MEMORY_DB_PATH) {
+    process.env.COCO_MEMORY_DB_PATH = path.join(
+      app.getPath('userData'),
+      'memory',
+      'memory.db',
+    );
+    log.info(`[Memory] COCO_MEMORY_DB_PATH=${process.env.COCO_MEMORY_DB_PATH}`);
+  }
 
   // Pass the resolved models to the services. config.json references
   // ${TUTOR_MODEL}/${OBSERVER_MODEL}, which the service manager expands from env.
@@ -1289,6 +1819,15 @@ const startObserver = () => {
   startObservationStream({
     url: `http://127.0.0.1:${sensingPort}/observations/stream`,
     onEvent: (event) => {
+      if (observationSleepGuard.shouldSuppress(event.ts)) {
+        if (event.observation) {
+          log.info(
+            `[Power] Dropped suppressed observation status=${event.status ?? '(none)'}`,
+          );
+        }
+        return;
+      }
+
       const status = event.status;
 
       // Tier-2 friction events from the struggle/pause path arrive without an
@@ -1301,7 +1840,11 @@ const startObserver = () => {
       }
 
       // Always forward to avatar window for pet animation / observation bubble.
-      if (avatarWindow && !avatarWindow.isDestroyed()) {
+      if (
+        !hideAvatarMode &&
+        avatarWindow &&
+        !avatarWindow.isDestroyed()
+      ) {
         avatarWindow.webContents.send('observation-update', event);
       }
 
@@ -1313,6 +1856,11 @@ const startObserver = () => {
           ts: event.ts ?? Math.floor(Date.now() / 1000),
           status: status as ObservationStatus,
           observation: cleanObservation(event.observation),
+          observation_id: event.observation_id,
+          proactive_support: PRECOMPUTE_STATUSES.has(status)
+            ? { engaged: false }
+            : undefined,
+          llm_metrics: event.llm_metrics,
         });
       }
 
@@ -1323,7 +1871,51 @@ const startObserver = () => {
       // regardless of session state — the renderer reveals it instantly either
       // way, falling back to the chat flow only on a cache miss.
       if (status && PRECOMPUTE_STATUSES.has(status)) {
-        precomputeSuggestion(event);
+        const suggestionPromise = precomputeSuggestion(event);
+        if (hideAvatarMode && event.observation) {
+          const rawObservation = cleanObservation(event.observation);
+          latestHiddenSuggestionObservationId = event.observation_id;
+          void suggestionPromise?.then((value) => {
+            // Hidden-avatar notifications preview the generated suggestion,
+            // rather than the observer diagnosis that led to it.
+            if (
+              !value ||
+              !hideAvatarMode ||
+              latestHiddenSuggestionObservationId !== event.observation_id
+            ) {
+              return;
+            }
+            const suggestion: InstantSuggestion =
+              value.kind === 'delegate'
+                ? {
+                    ...value,
+                    availableTools: buildAvailableTools(value.targetTool),
+                  }
+                : value;
+            showNotification({
+              message: suggestion.title,
+              actionLabel: 'Reveal full suggestion',
+              notifType: 'proactive-suggestion',
+              observationId: event.observation_id,
+              status,
+              rawObservation,
+              suggestion,
+            });
+            const sensingPort = process.env.SENSING_PORT || '8080';
+            axios.post(
+              `http://127.0.0.1:${sensingPort}/feedback`,
+              {
+                kind: 'shown',
+                surface: 'notification',
+                observation_id: event.observation_id ?? null,
+                status,
+              },
+              { timeout: 3000 },
+            ).catch((err) => {
+              log.warn(`[Feedback] failed to post: ${(err as Error).message}`);
+            });
+          });
+        }
       }
 
       // ── Pre-session: suggest starting a tutor session ─────────────────
@@ -1336,8 +1928,9 @@ const startObserver = () => {
         taskLabel
       ) {
         pendingTaskLabel = taskLabel;
+        const message = `I see you're ${taskLabel}. Want me to guide you with AI tools?`;
         showNotification({
-          message: `I see you're ${taskLabel}. Want me to guide you with AI tools?`,
+          message,
           actionLabel: 'Yes, start session',
           cancelLabel: 'Not now',
           notifType: 'session-start-prompt',
@@ -1360,6 +1953,32 @@ const startObserver = () => {
 app
   .whenReady()
   .then(() => {
+    powerMonitor.on('suspend', () => {
+      log.info('[Power] System suspended; clearing proactive UI and cache.');
+      observationSleepGuard.suspend();
+      latestHiddenSuggestionObservationId = undefined;
+      suggestionCache.clear();
+      notificationHovered = false;
+      notificationWindow?.destroy();
+      if (avatarWindow && !avatarWindow.isDestroyed()) {
+        avatarWindow.webContents.send('system-suspend');
+      }
+    });
+
+    powerMonitor.on('resume', () => {
+      log.info('[Power] System resumed; suppressing observations briefly.');
+      observationSleepGuard.resume();
+      latestHiddenSuggestionObservationId = undefined;
+      suggestionCache.clear();
+      notificationHovered = false;
+      notificationWindow?.destroy();
+      if (avatarWindow && !avatarWindow.isDestroyed()) {
+        // Send this again in case the renderer was frozen before handling the
+        // suspend event.
+        avatarWindow.webContents.send('system-suspend');
+      }
+    });
+
     // Ensure default workspace directory exists
     ensureDefaultWorkspaceExists();
 
@@ -1367,6 +1986,7 @@ app
     // be started by the 'onboarding-complete' IPC handler after the user
     // finishes or skips onboarding.
     if (isOnboardingComplete()) {
+      hideAvatarMode = readHideAvatarSetting();
       startObserver();
     }
 

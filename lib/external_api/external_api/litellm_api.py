@@ -1,6 +1,6 @@
 import logging
-from collections.abc import Sequence
-from typing import Literal
+from collections.abc import Callable, Sequence
+from typing import Any, Literal
 
 from external_api.types import TokenUsage
 from litellm import completion
@@ -27,9 +27,22 @@ class ImageURLContent(BaseModel):
 ContentBlock = TextContent | ImageURLContent
 
 
+class FunctionCall(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    id: str
+    type: Literal["function"] = "function"
+    function: FunctionCall
+
+
 class LiteLLMMessage(BaseModel):
     role: str  # "user", "assistant", "system"
-    content: list[ContentBlock]
+    content: list[ContentBlock] = Field(default_factory=list)
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
 
 
 def get_litellm_completion(
@@ -40,6 +53,11 @@ def get_litellm_completion(
     top_p: float | None = None,
     reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "default"]
     | None = None,
+    extra_body: dict[str, Any] | None = None,
+    stream: bool = False,
+    on_chunk: Callable[[str], None] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> tuple[LiteLLMMessage, TokenUsage]:
     """
     Get completion from LiteLLM API.
@@ -49,11 +67,16 @@ def get_litellm_completion(
     kwargs: dict = {
         "model": model,
         "messages": [
-            message.model_dump() if isinstance(message, LiteLLMMessage) else message
+            message.model_dump(
+                exclude_none=True,
+                exclude={"tool_calls"} if not message.tool_calls else None,
+            )
+            if isinstance(message, LiteLLMMessage)
+            else message
             for message in messages
         ],
         "temperature": temperature,
-        "stream": False,
+        "stream": stream,
     }
     # max_tokens is required by some providers (e.g. Anthropic); only include
     # it when explicitly provided so providers with built-in defaults aren't
@@ -66,10 +89,76 @@ def get_litellm_completion(
         kwargs["reasoning_effort"] = reasoning_effort
     if top_p is not None:
         kwargs["top_p"] = top_p
+    if extra_body is not None:
+        kwargs["extra_body"] = extra_body
+    if stream:
+        kwargs["stream_options"] = {"include_usage": True}
+    if tools is not None:
+        kwargs["tools"] = tools
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
 
     response = completion(**kwargs)
-    # print(f"Raw LiteLLM response: {response}")
-    raw_content = response["choices"][0]["message"]["content"]  # type: ignore
+    if stream:
+        text_parts: list[str] = []
+        tool_call_parts: dict[int, dict[str, str]] = {}
+        usage_data: Any = {}
+        for chunk in response:
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                usage_data = chunk_usage
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            content = getattr(delta, "content", None) if delta is not None else None
+            if content:
+                text_parts.append(content)
+                if on_chunk is not None:
+                    on_chunk(content)
+            for call in getattr(delta, "tool_calls", None) or []:
+                index = int(getattr(call, "index", 0) or 0)
+                part = tool_call_parts.setdefault(
+                    index,
+                    {"id": "", "name": "", "arguments": ""},
+                )
+                call_id = getattr(call, "id", None)
+                if call_id:
+                    part["id"] = call_id
+                function = getattr(call, "function", None)
+                if function is not None:
+                    name = getattr(function, "name", None)
+                    arguments = getattr(function, "arguments", None)
+                    if name:
+                        part["name"] += name
+                    if arguments:
+                        part["arguments"] += arguments
+        raw_content = "".join(text_parts)
+        raw_tool_calls = [
+            ToolCall(
+                id=part["id"],
+                function=FunctionCall(
+                    name=part["name"],
+                    arguments=part["arguments"],
+                ),
+            )
+            for _, part in sorted(tool_call_parts.items())
+        ]
+    else:
+        # print(f"Raw LiteLLM response: {response}")
+        response_message = response["choices"][0]["message"]  # type: ignore
+        raw_content = response_message["content"]
+        raw_tool_calls = [
+            ToolCall(
+                id=call["id"],
+                function=FunctionCall(
+                    name=call["function"]["name"],
+                    arguments=call["function"]["arguments"],
+                ),
+            )
+            for call in (response_message.get("tool_calls") or [])
+        ]
+        usage_data = response["usage"]  # type: ignore
     # Thinking models (e.g. gemini-2.5-pro) may return None for the visible
     # content field when only reasoning tokens are emitted.  Fall back to the
     # reasoning_content field so callers always get a non-empty string.
@@ -82,14 +171,22 @@ def get_litellm_completion(
     output = LiteLLMMessage(
         role="assistant",
         content=[TextContent(text=raw_content)],
+        tool_calls=raw_tool_calls,
     )
+
+    def usage_value(name: str) -> int:
+        value = getattr(usage_data, name, None)
+        if value is not None:
+            return int(value or 0)
+        if isinstance(usage_data, dict):
+            return int(usage_data.get(name, 0) or 0)
+        return 0
+
     usage = TokenUsage(
-        completion_tokens=response["usage"].get("completion_tokens", 0),  # type: ignore
-        prompt_tokens=response["usage"].get("prompt_tokens", 0),  # type: ignore
-        cache_creation_input_tokens=response["usage"].get(  # type: ignore
-            "cache_creation_input_tokens", 0
-        ),
-        cache_read_input_tokens=response["usage"].get("cache_read_input_tokens", 0),  # type: ignore
+        completion_tokens=usage_value("completion_tokens"),
+        prompt_tokens=usage_value("prompt_tokens"),
+        cache_creation_input_tokens=usage_value("cache_creation_input_tokens"),
+        cache_read_input_tokens=usage_value("cache_read_input_tokens"),
     )
 
     return output, usage

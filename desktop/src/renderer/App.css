@@ -83,7 +83,7 @@ body,
   --bubble-accent-soft: rgba(99, 102, 241, 0.18);
   position: absolute;
   bottom: 24px;
-  right: 168px; /* sit just left of the 150px pet + 12px padding + 6px gap */
+  right: 162px; /* tuck the tail closer to the smaller, 90%-scale avatar */
   max-width: 220px;
   padding: 9px 12px 10px;
   background: rgba(255, 255, 255, 0.96);
@@ -288,6 +288,23 @@ body,
    outlined as the secondary. */
 .bubble-tool-btn {
   background: var(--bubble-accent-soft);
+}
+
+.bubble-metrics-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 10.5px;
+}
+
+.bubble-metrics-row span {
+  border: 1px solid var(--bubble-accent-soft);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 1px 5px;
+  line-height: 1.35;
 }
 
 /* Thumbs up/down under a revealed suggestion. One vote — the chosen thumb
@@ -736,10 +753,88 @@ body,
   flex-shrink: 0;
 }
 
+.obs-support-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 2px 0 3px;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.obs-support-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.obs-support-view,
+.obs-support-rating {
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #6b7280;
+  font: inherit;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.obs-support-view {
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.obs-support-rating {
+  width: 23px;
+  height: 23px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 21px;
+}
+
+.obs-support-view:hover,
+.obs-support-rating:hover:not(:disabled) {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+}
+
+.obs-support-rating:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.obs-support-rating.is-rated {
+  border-color: #a5b4fc;
+  background: #e0e7ff;
+  opacity: 1;
+}
+
 .obs-history-time {
   font-size: 12px;
   color: #b0b5c3;
   flex-shrink: 0;
+}
+
+.obs-history-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 2px 0 4px;
+  font-size: 10.5px;
+  color: #6b7280;
+}
+
+.obs-history-metrics span {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #f9fafb;
+  padding: 1px 5px;
+  line-height: 1.35;
 }
 
 .obs-history-row {
@@ -801,6 +896,48 @@ body,
   color: #6366f1;
 }
 
+.obs-support-content {
+  margin-top: 5px;
+  padding: 8px 9px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8faff;
+  color: #374151;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.obs-support-content strong {
+  display: block;
+  margin-bottom: 3px;
+  color: #4338ca;
+  font-size: 11px;
+}
+
+.obs-support-content p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.obs-support-content--conversation {
+  color: #6366f1;
+  font-style: italic;
+}
+
+.obs-support-content--conversation button {
+  margin-top: 5px;
+  border: none;
+  background: transparent;
+  color: #4f46e5;
+  padding: 0;
+  font: inherit;
+  font-style: normal;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
 /* ── Toast notification (top-right, screen-pinned) ─────────────────────────── */
 
 .notification-root {
@@ -814,7 +951,7 @@ body,
 }
 
 .toast-card {
-  width: 344px;
+  width: calc(100% - 16px);
   /* Fill the notification BrowserWindow's vertical space so the footer
      button stays pinned at the bottom regardless of body content height. */
   height: 100%;
@@ -825,8 +962,19 @@ body,
   box-shadow:
     0 4px 6px rgba(0, 0, 0, 0.07),
     0 12px 28px rgba(0, 0, 0, 0.14);
-  font-family: 'PT Sans', Arial, Helvetica, sans-serif;
+  /* Match SessionChatView exactly. PT Sans is the product font; the system
+     fallbacks keep every window consistent if the web font is unavailable. */
+  font-family: 'PT Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   overflow: hidden;
+}
+
+/* Electron form controls otherwise retain their native UI font instead of
+   inheriting the typeface used by the surrounding notification. */
+.toast-card button,
+.toast-card input,
+.toast-card textarea,
+.toast-card select {
+  font-family: inherit;
 }
 
 /* Header row: brand label + close button */
@@ -836,6 +984,8 @@ body,
   justify-content: space-between;
   padding: 10px 12px 8px 14px;
   border-bottom: 1px solid #f1f3f4;
+  cursor: move;
+  -webkit-app-region: drag;
 }
 
 .toast-brand {
@@ -861,7 +1011,15 @@ body,
   text-transform: uppercase;
 }
 
+.toast-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+
 /* Close (×) button – fully inside the card */
+.toast-window-control,
 .toast-close {
   width: 22px;
   height: 22px;
@@ -880,6 +1038,7 @@ body,
   transition: background 0.12s ease;
 }
 
+.toast-window-control:hover,
 .toast-close:hover {
   background: #e2e4ea;
   color: #374151;
@@ -897,9 +1056,10 @@ body,
 }
 
 .toast-message {
-  font-size: 16px;
+  /* Match the app's standard chat, input, and button body text. */
+  font-size: 13px;
   color: #1f2937;
-  line-height: 1.55;
+  line-height: 1.5;
   white-space: normal;
   word-break: break-word;
   overflow-wrap: break-word;
@@ -977,6 +1137,190 @@ body,
   color: #4b5563;
 }
 
+/* Markdown inside the session chat.
+   Keep the hierarchy readable at chat-bubble scale instead of inheriting the
+   browser's document-sized heading and block margins. */
+.chat-markdown {
+  min-width: 0;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown > :first-child {
+  margin-top: 0;
+}
+
+.chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown p {
+  margin: 0 0 7px;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin: 12px 0 5px;
+  color: #1f2937;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.chat-markdown h1 {
+  font-size: 18px;
+}
+
+.chat-markdown h2 {
+  font-size: 16px;
+}
+
+.chat-markdown h3 {
+  font-size: 14px;
+}
+
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: 13px;
+}
+
+.chat-markdown strong {
+  color: #1f2937;
+  font-weight: 700;
+}
+
+.chat-markdown ul,
+.chat-markdown ol {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+
+.chat-markdown li {
+  margin: 3px 0;
+  padding-left: 1px;
+}
+
+.chat-markdown li > p {
+  margin-bottom: 3px;
+}
+
+.chat-markdown li > ul,
+.chat-markdown li > ol {
+  margin: 2px 0 3px;
+}
+
+.chat-markdown .task-list-item {
+  list-style: none;
+}
+
+.chat-markdown .task-list-item input {
+  margin: 0 6px 0 -19px;
+  vertical-align: -1px;
+  accent-color: #204a79;
+}
+
+.chat-markdown hr {
+  height: 1px;
+  margin: 9px 0;
+  border: 0;
+  background: #d1d5db;
+}
+
+.chat-markdown blockquote {
+  margin: 7px 0;
+  padding: 3px 0 3px 10px;
+  border-left: 3px solid #bcd0fc;
+  color: #4b5563;
+}
+
+.chat-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown a {
+  color: #204a79;
+  text-decoration: underline;
+  text-decoration-color: #bcd0fc;
+  text-underline-offset: 2px;
+}
+
+.chat-markdown a:hover {
+  text-decoration-color: currentColor;
+}
+
+.chat-markdown code {
+  padding: 1px 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #1e3a5f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.chat-markdown pre {
+  max-width: 100%;
+  margin: 7px 0;
+  padding: 9px 10px;
+  overflow-x: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  background: #ffffff;
+  line-height: 1.45;
+  white-space: pre;
+}
+
+.chat-markdown pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1f2937;
+}
+
+.chat-markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 7px 0;
+  overflow-x: auto;
+  border-spacing: 0;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.chat-markdown th,
+.chat-markdown td {
+  padding: 5px 7px;
+  border: 1px solid #d1d5db;
+  text-align: left;
+  vertical-align: top;
+}
+
+.chat-markdown th {
+  background: #e9efff;
+  color: #1f2937;
+  font-weight: 700;
+}
+
+.chat-markdown img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 7px 0;
+  border-radius: 7px;
+}
+
+.chat-markdown .katex-display {
+  max-width: 100%;
+  margin: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* Compact card variant — for short prompts (session-start/end) so the white
    card hugs the content instead of stretching to the full window height.
    The notification window stays the same size; the transparent area outside
@@ -989,11 +1333,44 @@ body,
   flex: 0 0 auto;
 }
 
+/* Hidden-avatar suggestion preview: a compact, clearly labeled title card.
+   The BrowserWindow can stay large enough for the revealed content; the unused
+   transparent area is invisible until the full suggestion is opened. */
+.toast-card--suggestion-preview {
+  height: auto;
+}
+
+.toast-card--suggestion-preview .toast-body {
+  flex: 0 0 auto;
+  padding-top: 9px;
+}
+
+.toast-card--suggestion-preview .toast-message {
+  color: #111827;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.toast-suggestion-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 4px;
+  color: #6366f1;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
 /* Action button row */
 .toast-footer {
   padding: 8px 14px 12px;
   display: flex;
   justify-content: flex-end;
+  gap: 6px;
 }
 
 .toast-action {
@@ -1013,12 +1390,64 @@ body,
   border-color: #c7c9f0;
 }
 
+.toast-action:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 /* Two-button footer for proactive prompts */
 .toast-footer-prompt {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   padding: 8px 14px 12px;
+}
+
+.toast-tool-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.toast-tool-action {
+  color: #204a79;
+  border-color: #bcd0fc;
+  background: #e9efff;
+}
+
+.toast-chat-action,
+.bubble-chat-action {
+  color: #4338ca;
+  border-color: #c7d2fe;
+  background: #eef2ff;
+}
+
+.toast-rating-actions {
+  display: flex;
+  gap: 3px;
+  margin-right: auto;
+}
+
+.toast-rating-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.toast-rating-btn:hover,
+.toast-rating-btn.is-rated {
+  opacity: 1;
+  background: #e9efff;
+  border-color: #bcd0fc;
+}
+
+.toast-rating-btn:disabled:not(.is-rated) {
+  cursor: default;
+  opacity: 0.25;
 }
 
 .toast-cancel {

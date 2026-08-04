@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { encodeCustomChatbot, encodeCustomAgent } from './observation-types';
 import './OnboardingView.css';
-import foxWorking from '../../../assets/pet.png';
-import foxStudying from '../../../assets/write1.png';
-import foxEveryday from '../../../assets/tool1.png';
+import foxWorking from '../../../assets/pet1.png';
 import foxWaiting from '../../../assets/wait1.png';
+import studentLearningIcon from '../../../assets/student_learning.png';
+import everydaySupportIcon from '../../../assets/everyday_support.png';
+import customModeIcon from '../../../assets/custom.png';
 
 // Platform-appropriate label for the global screen-capture hot key
 // (registered in main.ts as CommandOrControl+Shift+Space).
@@ -17,13 +18,13 @@ const MODES = [
     id: 'student_learning',
     name: 'Student Learning',
     desc: 'Coco acts as an AI Tutor — guiding you to learn and solve problems yourself with hints, not answers.',
-    img: foxStudying,
+    img: studentLearningIcon,
   },
   {
     id: 'everyday_support',
     name: 'Everyday Support',
     desc: 'Coco acts as an AI Assistant — spotting tasks worth delegating and suggesting the right AI tool to do them.',
-    img: foxEveryday,
+    img: everydaySupportIcon,
   },
 ];
 
@@ -73,15 +74,15 @@ The most recent message typed by the user, if any.
 </user_input>
 
 <recent_observations>
-Your last few observations and how the user reacted to each bubble (ACCEPTED / DISMISSED / ignored). Use it to avoid nagging: if the user just DISMISSED a suggestion for the activity they are still doing, do NOT re-raise the same kind of suggestion.
+Your last few observations and how the user reacted to each bubble (ACCEPTED / DISMISSED / NEGATIVE rating / ignored). Use it to avoid nagging: if the user just DISMISSED a suggestion for the activity they are still doing, do NOT re-raise the same kind of suggestion. If the user rated the resulting help as NEGATIVE, classify similar observations as "progress" unless the situation has materially changed.
 </recent_observations>
 
-Your responsibilities: understand the timeline of activity, describe the current screen state, infer the user's intention, detect delegation opportunities, identify AI tool interaction problems, assess task completion, and detect AI output application.
+Your responsibilities: understand the timeline of activity, describe the current screen state, infer the user's intention, detect delegation opportunities, identify mistakes made by the human, assess task completion, and detect AI output application.
 
 Assign a single status label that best captures the user's current situation:
 - "progress": user is making smooth forward movement with no clear opportunity to delegate
 - "inefficient": clear delegation opportunity detected — a task an AI tool/agent could take over
-- "ai_struggle": user is actively using an AI tool but struggling
+- "mistake": a concrete human-authored mistake is visible
 - "stuck": user appears stalled — no visible progress, repeated actions, or prolonged inactivity
 - "observing": cannot determine a meaningful status from the available information
 
@@ -90,10 +91,10 @@ Output in JSON format:
   "observation": "description of screen activity and how it evolved over time",
   "user_intent": "what the user appears to be trying to accomplish, in under 15 words",
   "inefficiency_patterns": "a task the user is doing manually that an AI tool/agent could take over, or 'no delegation opportunity'",
-  "ai_interaction_problems": "difficulties the user is having with an AI tool, or 'no AI interaction problem'",
+  "mistake_made_by_human": "a concrete typo, error, or other human-authored mistake visible on screen, or 'no human mistake detected'",
   "task_complete": "yes or no",
   "applying_ai_output": "yes or no",
-  "status": "progress | inefficient | ai_struggle | stuck | observing"
+  "status": "progress | mistake | inefficient | stuck | observing"
 }`;
 
 // ── Step components ───────────────────────────────────────────────────────────
@@ -350,7 +351,11 @@ function StepMode({
         onKeyDown={(e) => e.key === 'Enter' && setSelectedMode('custom')}
         style={{ display: 'flex', alignItems: 'center', gap: 12 }}
       >
-        <span style={{ fontSize: 30, width: 46, textAlign: 'center', flexShrink: 0 }}>✏️</span>
+        <img
+          src={customModeIcon}
+          alt=""
+          style={{ width: 46, height: 46, objectFit: 'contain', flexShrink: 0 }}
+        />
         <div>
           <div className="ob-path-title">Custom</div>
           <div className="ob-path-desc" style={{ marginBottom: 0 }}>

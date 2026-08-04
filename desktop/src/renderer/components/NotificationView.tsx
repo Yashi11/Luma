@@ -4,9 +4,15 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import type { InstantSuggestion } from './observation-types';
 
 type VizState = 'none' | 'success' | 'error';
-type NotifType = 'default' | 'session-start-prompt' | 'session-end-prompt';
+type NotifType =
+  | 'default'
+  | 'proactive-suggestion'
+  | 'instant-suggestion'
+  | 'session-start-prompt'
+  | 'session-end-prompt';
 
 interface NotificationPayload {
   message: string;
@@ -14,6 +20,11 @@ interface NotificationPayload {
   cancelLabel?: string;
   vizState?: VizState;
   notifType?: NotifType;
+  observationId?: string;
+  status?: string;
+  rawObservation?: string;
+  suggestion?: InstantSuggestion;
+  adjustable?: boolean;
 }
 
 // ── Tutor JSON parsing ────────────────────────────────────────────────────────
@@ -138,29 +149,10 @@ function truncateForPreview(text: string): string {
 }
 
 // ── Markdown renderer config ──────────────────────────────────────────────────
-// Pythony languages we treat as "visualization code" and never render.
-// Python is the only one used by the tutor today, but Plotly/JSON specs
-// might appear later — keep the list narrow and explicit.
-const VIZ_CODE_LANGS = new Set(['python', 'py']);
-
 // Custom react-markdown renderers:
-//  - <code>: drop fenced visualization code blocks (per the user request);
-//    keep inline code and short non-python fences.
-//  - <a>:    open external links in the system browser via shell, not
+//  - <a>: open external links in the system browser via shell, not
 //    inside this transparent BrowserWindow.
 const markdownComponents: React.ComponentProps<typeof Markdown>['components'] = {
-  code({ inline, className, children, ...props }: any) {
-    const lang = /language-(\w+)/.exec(className || '')?.[1]?.toLowerCase();
-    if (!inline && lang && VIZ_CODE_LANGS.has(lang)) {
-      // Hide the visualization code block entirely — the toast is for guidance.
-      return null;
-    }
-    return (
-      <code className={className} {...props}>
-        {children}
-      </code>
-    );
-  },
   a({ href, children, ...props }: any) {
     return (
       <a href={href} target="_blank" rel="noreferrer" {...props}>
@@ -178,6 +170,16 @@ export function NotificationBubble({
   onAction,
   onCancel,
   onDismiss,
+  onHoverChange,
+  suggestion,
+  onSuggestionAction,
+  onChatAboutSuggestion,
+  suggestionRating,
+  onRateSuggestion,
+  copyConfirmed,
+  adjustable,
+  expanded,
+  onToggleExpanded,
 }: {
   message: string;
   actionLabel?: string;
@@ -186,34 +188,77 @@ export function NotificationBubble({
   onAction?: () => void;
   onCancel?: () => void;
   onDismiss?: () => void;
+  onHoverChange?: (hovered: boolean) => void;
+  suggestion?: InstantSuggestion;
+  onSuggestionAction?: (toolId: string | null) => void;
+  onChatAboutSuggestion?: () => void;
+  suggestionRating?: 'up' | 'down' | null;
+  onRateSuggestion?: (rating: 'up' | 'down') => void;
+  copyConfirmed?: boolean;
+  adjustable?: boolean;
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
 }) {
   const isPrompt =
     notifType === 'session-start-prompt' || notifType === 'session-end-prompt';
+  const isSuggestionPreview =
+    notifType === 'proactive-suggestion' && suggestion != null;
+  const isRevealedSuggestion =
+    notifType === 'instant-suggestion' && suggestion != null;
 
   // For default pause-event guidance, truncate to a short preview so the
   // card doesn't overflow with a multi-paragraph response.
-  const displayMessage = isPrompt
-    ? resolveMessage(message)
-    : truncateForPreview(resolveMessage(message));
+  const resolvedMessage = resolveMessage(message);
+  const displayMessage =
+    expanded || isPrompt || notifType === 'instant-suggestion'
+      ? resolvedMessage
+      : truncateForPreview(resolvedMessage);
 
   return (
-    <div className={`toast-card${isPrompt ? ' toast-card--compact' : ''}`}>
+    <div
+      className={`toast-card${isPrompt ? ' toast-card--compact' : ''}${
+        isSuggestionPreview ? ' toast-card--suggestion-preview' : ''
+      }`}
+      onMouseEnter={() => onHoverChange?.(true)}
+      onMouseLeave={() => onHoverChange?.(false)}
+    >
       <div className="toast-header">
         <div className="toast-brand">
           <span className="toast-brand-dot" />
-          <span className="toast-brand-name">AI Tutor</span>
+          <span className="toast-brand-name">Coco</span>
         </div>
-        <button
-          type="button"
-          className="toast-close"
-          onClick={onDismiss}
-          aria-label="Dismiss"
-        >
-          ×
-        </button>
+        <div className="toast-header-actions">
+          {adjustable && !isSuggestionPreview && (
+            <button
+              type="button"
+              className="toast-window-control"
+              onClick={onToggleExpanded}
+              aria-label={
+                expanded ? 'Collapse notification' : 'Expand notification'
+              }
+              title={expanded ? 'Collapse' : 'Expand'}
+            >
+              {expanded ? '↙' : '↗'}
+            </button>
+          )}
+          <button
+            type="button"
+            className="toast-close"
+            onClick={onDismiss}
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       <div className="toast-body">
+        {isSuggestionPreview && (
+          <div className="toast-suggestion-label">
+            <span aria-hidden="true">✦</span>
+            <span>Suggestion</span>
+          </div>
+        )}
         <div className="toast-message toast-markdown">
           <Markdown
             remarkPlugins={[remarkGfm, remarkMath]}
@@ -239,9 +284,82 @@ export function NotificationBubble({
             </button>
           )}
         </div>
+      ) : isRevealedSuggestion && suggestion.kind === 'delegate' ? (
+        <div className="toast-footer toast-tool-actions">
+          <div className="toast-rating-actions">
+            {(['up', 'down'] as const).map((rating) => (
+              <button
+                key={rating}
+                type="button"
+                className={`toast-rating-btn${
+                  suggestionRating === rating ? ' is-rated' : ''
+                }`}
+                aria-label={rating === 'up' ? 'Good suggestion' : 'Not helpful'}
+                disabled={suggestionRating != null}
+                onClick={() => onRateSuggestion?.(rating)}
+              >
+                {rating === 'up' ? '👍' : '👎'}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="toast-action"
+            onClick={() => onSuggestionAction?.(null)}
+            disabled={copyConfirmed}
+          >
+            {copyConfirmed ? 'Copied ✓' : 'Copy prompt'}
+          </button>
+          <button
+            type="button"
+            className="toast-action toast-chat-action"
+            onClick={onChatAboutSuggestion}
+          >
+            Chat about it
+          </button>
+          {(suggestion.availableTools ?? []).map((tool) => (
+            <button
+              key={tool.id}
+              type="button"
+              className="toast-action toast-tool-action"
+              onClick={() => onSuggestionAction?.(tool.id)}
+            >
+              Open {tool.label}
+            </button>
+          ))}
+        </div>
       ) : (
         actionLabel && (
           <div className="toast-footer">
+            {isRevealedSuggestion && (
+              <div className="toast-rating-actions">
+                {(['up', 'down'] as const).map((rating) => (
+                  <button
+                    key={rating}
+                    type="button"
+                    className={`toast-rating-btn${
+                      suggestionRating === rating ? ' is-rated' : ''
+                    }`}
+                    aria-label={
+                      rating === 'up' ? 'Good suggestion' : 'Not helpful'
+                    }
+                    disabled={suggestionRating != null}
+                    onClick={() => onRateSuggestion?.(rating)}
+                  >
+                    {rating === 'up' ? '👍' : '👎'}
+                  </button>
+                ))}
+              </div>
+            )}
+            {isRevealedSuggestion && (
+              <button
+                type="button"
+                className="toast-action toast-chat-action"
+                onClick={onChatAboutSuggestion}
+              >
+                Chat about it
+              </button>
+            )}
             <button type="button" className="toast-action" onClick={onAction}>
               {actionLabel} →
             </button>
@@ -255,6 +373,12 @@ export function NotificationBubble({
 export default function NotificationView() {
   const [visible, setVisible] = useState(false);
   const [payload, setPayload] = useState<NotificationPayload | null>(null);
+  const [loadingSuggestion, setLoadingSuggestion] = useState(false);
+  const [suggestionRating, setSuggestionRating] = useState<
+    'up' | 'down' | null
+  >(null);
+  const [copyConfirmed, setCopyConfirmed] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
@@ -274,7 +398,16 @@ export default function NotificationView() {
               ? incoming.vizState
               : 'none',
           notifType: incoming?.notifType ?? 'default',
+          observationId: incoming?.observationId,
+          status: incoming?.status,
+          rawObservation: incoming?.rawObservation,
+          suggestion: incoming?.suggestion,
+          adjustable: incoming?.adjustable === true,
         });
+        setLoadingSuggestion(false);
+        setSuggestionRating(null);
+        setCopyConfirmed(false);
+        setExpanded(false);
         setVisible(true);
       },
     );
@@ -287,7 +420,31 @@ export default function NotificationView() {
 
   const ipc = window.electron?.ipcRenderer;
 
-  const handleAction = () => {
+  const rateInstantSuggestion = (rating: 'up' | 'down') => {
+    if (
+      suggestionRating ||
+      !payload.observationId ||
+      !payload.suggestion
+    ) {
+      return;
+    }
+    setSuggestionRating(rating);
+    const ratedAt = Math.floor(Date.now() / 1000);
+    ipc?.sendMessage('activity-support-rated', {
+      observationId: payload.observationId,
+      rating,
+      ratedAt,
+    });
+    ipc?.sendMessage('training-feedback', {
+      kind: rating === 'up' ? 'thumbs_up' : 'thumbs_down',
+      surface: 'notification',
+      observation_id: payload.observationId,
+      status: payload.status,
+      text: payload.suggestion.copyText ?? null,
+    });
+  };
+
+  const handleAction = async () => {
     if (payload.notifType === 'session-start-prompt') {
       // Ask main to show the mini session-setup window.
       ipc?.sendMessage('show-session-setup');
@@ -301,6 +458,66 @@ export default function NotificationView() {
       setVisible(false);
       return;
     }
+    if (payload.notifType === 'proactive-suggestion') {
+      if (loadingSuggestion) return;
+      let suggestion = payload.suggestion;
+      if (!suggestion) {
+        setLoadingSuggestion(true);
+        const result = await ipc?.invoke('get-instant-suggestion', {
+          observationId: payload.observationId,
+        });
+        setLoadingSuggestion(false);
+        suggestion =
+          result?.status === 'ready'
+            ? (result.suggestion as InstantSuggestion)
+            : undefined;
+      }
+      if (suggestion) {
+        const detail =
+          suggestion.kind === 'delegate'
+            ? suggestion.prompt
+            : suggestion.body;
+        setPayload({
+          ...payload,
+          message: `**${suggestion.title}**\n\n${detail ?? suggestion.copyText}`,
+          actionLabel: suggestion.kind === 'content' ? 'Copy' : undefined,
+          notifType: 'instant-suggestion',
+          suggestion,
+        });
+        const engagedAt = Math.floor(Date.now() / 1000);
+        ipc?.sendMessage('activity-support-engaged', {
+          observationId: payload.observationId,
+          engagedAt,
+          suggestion,
+          destination: 'inline',
+        });
+        ipc?.sendMessage('training-feedback', {
+          kind: 'engage',
+          surface: 'notification',
+          observation_id: payload.observationId ?? null,
+          status: payload.status,
+          text: payload.rawObservation ?? null,
+        });
+        return;
+      }
+      // Preserve the existing chat route as a cache-miss/error fallback.
+      ipc?.sendMessage('open-notification-suggestion', {
+        observationId: payload.observationId,
+        status: payload.status,
+        rawObservation: payload.rawObservation,
+      });
+      setVisible(false);
+      return;
+    }
+    if (payload.notifType === 'instant-suggestion') {
+      ipc?.sendMessage('suggestion-action', {
+        copyText: payload.suggestion?.copyText,
+      });
+      rateInstantSuggestion('up');
+      setVisible(false);
+      window.close();
+      return;
+    }
     // Default: open the main window (existing tutor guidance behaviour).
     ipc?.sendMessage('open-main-window');
     setVisible(false);
@@ -312,7 +529,63 @@ export default function NotificationView() {
     window.close();
   };
 
+  const recordUnengagedDismissal = () => {
+    if (
+      payload.notifType !== 'proactive-suggestion' ||
+      !payload.observationId
+    ) {
+      return;
+    }
+    ipc?.sendMessage('training-feedback', {
+      kind: 'dismiss',
+      surface: 'notification',
+      observation_id: payload.observationId,
+      status: payload.status,
+      text: payload.rawObservation ?? null,
+    });
+  };
+
   const handleDismiss = () => {
+    recordUnengagedDismissal();
+    setVisible(false);
+    window.close();
+  };
+
+  const handleHoverChange = (hovered: boolean) => {
+    ipc?.sendMessage('notification-hover-state', { hovered });
+  };
+
+  const handleToggleExpanded = () => {
+    const nextExpanded = !expanded;
+    setExpanded(nextExpanded);
+    ipc?.sendMessage('set-notification-expanded', {
+      expanded: nextExpanded,
+    });
+  };
+
+  const handleSuggestionAction = (toolId: string | null) => {
+    ipc?.sendMessage('suggestion-action', {
+      toolId,
+      copyText: payload.suggestion?.copyText,
+    });
+    if (toolId === null) {
+      rateInstantSuggestion('up');
+      setCopyConfirmed(true);
+      return;
+    }
+    setVisible(false);
+    window.close();
+  };
+
+  const handleChatAboutSuggestion = () => {
+    if (!payload.suggestion) return;
+    ipc?.sendMessage('chat-about-suggestion', {
+      observationId: payload.observationId,
+      status: payload.status,
+      rawObservation: payload.rawObservation,
+      suggestion: payload.suggestion,
+      surface: 'notification',
+    });
     setVisible(false);
     window.close();
   };
@@ -321,12 +594,22 @@ export default function NotificationView() {
     <div className="notification-root">
       <NotificationBubble
         message={payload.message}
-        actionLabel={payload.actionLabel}
+        actionLabel={loadingSuggestion ? 'Preparing suggestion…' : payload.actionLabel}
         cancelLabel={payload.cancelLabel}
         notifType={payload.notifType}
         onAction={handleAction}
         onCancel={handleCancel}
         onDismiss={handleDismiss}
+        onHoverChange={handleHoverChange}
+        suggestion={payload.suggestion}
+        onSuggestionAction={handleSuggestionAction}
+        onChatAboutSuggestion={handleChatAboutSuggestion}
+        suggestionRating={suggestionRating}
+        onRateSuggestion={rateInstantSuggestion}
+        copyConfirmed={copyConfirmed}
+        adjustable={payload.adjustable}
+        expanded={expanded}
+        onToggleExpanded={handleToggleExpanded}
       />
     </div>
   );

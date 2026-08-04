@@ -15,6 +15,66 @@ export type ObservationStatus =
   | 'observing'
   | 'discernment_opportunity';
 
+export interface LLMCallMetrics {
+  call_id?: string;
+  operation?: string | null;
+  model?: string;
+  provider?: string;
+  modality?: 'llm' | 'vlm';
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  duration_ms?: number;
+  started_at?: number;
+  ended_at?: number;
+  success?: boolean;
+  error?: string | null;
+}
+
+export interface TutorObservation {
+  id?: string;
+  content: string;
+  created_at?: string;
+  observation_type?: string;
+  session_id?: string | null;
+  scenario?: string | null;
+}
+
+export interface TutorMemoryResult {
+  id?: string;
+  text: string;
+  reasoning?: string;
+  confidence?: number;
+  durability?: number;
+  score?: number;
+  created_at?: string;
+  updated_at?: string;
+  evidence?: TutorObservation[];
+}
+
+export interface TutorToolCall {
+  id: string;
+  name: string;
+  arguments: {
+    query?: string;
+    focus?: string;
+    start_hh_mm_ago?: string | null;
+    end_hh_mm_ago?: string | null;
+    limit?: number;
+    evidence_limit?: number;
+  };
+  status: 'running' | 'completed' | 'error';
+  result?: {
+    count?: number;
+    results?: TutorMemoryResult[];
+    observation?: string;
+    llm_metrics?: LLMCallMetrics | null;
+    error?: string;
+  };
+}
+
 export interface ObservationEvent {
   type: string;
   observation?: string;
@@ -24,6 +84,7 @@ export interface ObservationEvent {
   applying_ai_output?: string;
   /** Stable id of the observer call that produced this event (for feedback joins). */
   observation_id?: string;
+  llm_metrics?: LLMCallMetrics;
 }
 
 /**
@@ -43,6 +104,7 @@ export interface InstantSuggestion {
   targetTool?: string;
   prompt?: string;
   copyText: string;
+  llm_metrics?: LLMCallMetrics;
   /**
    * The user's own AI tools (from their onboarding selection), so a `delegate`
    * bubble can show one "Open" button per available tool and let the user pick
@@ -317,6 +379,25 @@ export interface ActivityRecord {
   status: ObservationStatus;
   /** Cleaned, human-readable observation text. */
   observation: string;
+  /** Stable join key for updating this record when the user reacts later. */
+  observation_id?: string;
+  /** Present when this observation offered actionable proactive support. */
+  proactive_support?: {
+    engaged: boolean;
+    /** Unix timestamp (seconds) of the user's "Help me with this" click. */
+    engaged_at?: number;
+    /** Inline support can be reopened directly from History. */
+    suggestion?: InstantSuggestion;
+    /** Transient renderer hint that an in-flight/cached suggestion can be opened. */
+    available?: boolean;
+    /** Cache misses route support into the persistent chat conversation. */
+    destination?: 'inline' | 'conversation';
+    /** Explicit usefulness rating, whether given in the bubble or History. */
+    rating?: 'up' | 'down';
+    /** Unix timestamp (seconds) of the usefulness rating. */
+    rated_at?: number;
+  };
+  llm_metrics?: LLMCallMetrics;
 }
 
 
