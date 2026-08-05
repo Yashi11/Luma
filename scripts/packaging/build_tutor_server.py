@@ -1,6 +1,6 @@
 """PyInstaller build script for the Tutor Server.
 
-Run via: uv run python build_tutor_server.py
+Run via: uv run python scripts/packaging/build_tutor_server.py
 Output:  desktop/service-dist/tutor-server/
 """
 
@@ -10,9 +10,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = ROOT / "desktop" / "service-dist" / "tutor-server"
-ENTRY = ROOT / "lib" / "proactive_tutor" / "proactive_tutor" / "tutor_server.py"
+ENTRY = ROOT / "lib" / "proactive_tutor" / "proactive_tutor" / "packaged_entrypoint.py"
 SEP = os.pathsep
 
 HIDDEN_IMPORTS = [
@@ -39,6 +39,8 @@ HIDDEN_IMPORTS = [
     # workspace packages
     "proactive_tutor",
     "external_api",
+    "memory",
+    "memory_mcp.server",
     "py_utils",
 ]
 
@@ -81,21 +83,20 @@ def main() -> None:
         ROOT / "lib" / "proactive_tutor" / "proactive_tutor" / "prompts_everyday"
     )
     prompts_ps = (
-        ROOT
-        / "lib"
-        / "proactive_tutor"
-        / "proactive_tutor"
-        / "prompts_problem_solving"
+        ROOT / "lib" / "proactive_tutor" / "proactive_tutor" / "prompts_problem_solving"
     )
     if prompts_everyday.exists():
-        cmd += ["--add-data", f"{prompts_everyday}{SEP}proactive_tutor/prompts_everyday"]
+        cmd += [
+            "--add-data",
+            f"{prompts_everyday}{SEP}proactive_tutor/prompts_everyday",
+        ]
     if prompts_ps.exists():
         cmd += [
             "--add-data",
             f"{prompts_ps}{SEP}proactive_tutor/prompts_problem_solving",
         ]
 
-    print(f"Running PyInstaller for tutor-server...")
+    print("Running PyInstaller for tutor-server...")
     print(f"  Entry: {ENTRY}")
     print(f"  Output: {DIST_DIR}")
     result = subprocess.run(cmd, cwd=ROOT)

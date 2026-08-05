@@ -1,6 +1,6 @@
 """PyInstaller build script for the Sensing Server.
 
-Run via: uv run python build_sensing_server.py
+Run via: uv run python scripts/packaging/build_sensing_server.py
 Output:  desktop/service-dist/sensing-server/
 """
 
@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = ROOT / "desktop" / "service-dist" / "sensing-server"
 ENTRY = ROOT / "lib" / "sensing" / "sensing" / "sensing_server.py"
 SEP = os.pathsep  # ":" on macOS/Linux, ";" on Windows
@@ -47,10 +47,8 @@ HIDDEN_IMPORTS = [
     "sensing",
     "external_api",
     "py_utils",
-    # numeric / cv
+    # numeric / image processing
     "numpy",
-    "pandas",
-    "cv2",
     "PIL",
     "shapely",
     "mss",
@@ -62,8 +60,14 @@ COLLECT_DATA = [
 ]
 
 COLLECT_BINARIES = [
-    "cv2",
     "shapely",
+]
+
+EXCLUDED_MODULES = [
+    # LiteLLM has optional code paths that reference pandas, but Coco's runtime
+    # does not use them. Excluding it prevents PyInstaller from collecting the
+    # full pandas/NumPy analysis stack transitively.
+    "pandas",
 ]
 
 if platform.system() == "Darwin":
@@ -127,6 +131,9 @@ def main() -> None:
     for pkg in COLLECT_BINARIES:
         cmd += ["--collect-binaries", pkg]
 
+    for module in EXCLUDED_MODULES:
+        cmd += ["--exclude-module", module]
+
     # Add prompt data files
     prompts_everyday = ROOT / "lib" / "sensing" / "sensing" / "prompts_everyday"
     prompts_ps = ROOT / "lib" / "sensing" / "sensing" / "prompts_problem_solving"
@@ -135,7 +142,7 @@ def main() -> None:
     if prompts_ps.exists():
         cmd += ["--add-data", f"{prompts_ps}{SEP}sensing/prompts_problem_solving"]
 
-    print(f"Running PyInstaller for sensing-server...")
+    print("Running PyInstaller for sensing-server...")
     print(f"  Entry: {ENTRY}")
     print(f"  Output: {DIST_DIR}")
     result = subprocess.run(cmd, cwd=ROOT)
