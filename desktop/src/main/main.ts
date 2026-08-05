@@ -12,7 +12,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { randomUUID } from 'crypto';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import {
   app,
   BrowserWindow,
@@ -53,6 +53,16 @@ import {
   readConversations,
   saveConversation,
 } from './conversation-store';
+import {
+  defaultTutor,
+  getModelConfigurationView,
+  prepareModelConnectionTest,
+  readModelConfiguration,
+  resolveModelRuntime,
+  saveModelConfiguration,
+  type ModelConfigurationInput,
+  type ModelConnection,
+} from './model-config-store';
 import { ObservationSleepGuard } from './observation-sleep-guard';
 import { cleanObservation, AI_TOOLS, resolveAiTools, parseAiTool } from '../renderer/components/observation-types';
 import type {
@@ -64,6 +74,17 @@ import type {
 const dotenv = require('dotenv');
 
 app.setName('coco');
+
+// A dedicated development override makes first-launch testing reliable through
+// npm's nested webpack/electronmon process tree. Chromium's --user-data-dir
+// flag is not consistently forwarded by every npm/shell combination.
+const developmentUserDataDir = process.env.COCO_DESKTOP_USER_DATA_DIR?.trim();
+if (!app.isPackaged && developmentUserDataDir) {
+  const resolvedUserDataDir = path.resolve(developmentUserDataDir);
+  fs.mkdirSync(resolvedUserDataDir, { recursive: true });
+  app.setPath('userData', resolvedUserDataDir);
+  log.info(`[Development] userData override: ${resolvedUserDataDir}`);
+}
 
 if (app.isPackaged) {
   // Packaged: read .env from the user-data folder (e.g. ~/Library/Application
@@ -177,6 +198,7 @@ let isSessionActive = false;
 let currentUserId: string | null = null;
 let currentSessionId: string | null = null;
 let pendingTaskLabel: string | null = null;
+let currentTutorModelId: string | null = null;
 // Invite timing is owned by the sensing-side judge; no renderer-side cooldown.
 
 // Preload path helper
@@ -438,7 +460,11 @@ const openChatForSession = (
   if (!chatWindow) return;
 
   const send = () => {
-    chatWindow?.webContents.send('session-init', { sessionId, problemStatement });
+    chatWindow?.webContents.send('session-init', {
+      sessionId,
+      problemStatement,
+      tutorModelId: currentTutorModelId,
+    });
     if (seed) chatWindow?.webContents.send('help-request', seed);
   };
   if (alreadyLoaded) {
@@ -586,6 +612,290 @@ ipcMain.handle('get-profile', () => {
     return null;
   }
 });
+
+// Model/provider configuration is owned by the main process. The renderer sees
+// only masked credential status; plaintext keys are accepted on save and never
+// returned over IPC.
+ipcMain.handle('get-model-configuration', () => getModelConfigurationView());
+
+ipcMain.handle(
+  'test-model-connection',
+  async (
+    _event,
+    {
+      role,
+      connection,
+      apiKey,
+    }: {
+      role?: 'sensing' | 'tutor';
+      connection?: ModelConnection;
+      apiKey?: string;
+    } = {},
+  ) => {
+    if ((role !== 'sensing' && role !== 'tutor') || !connection) {
+      return { success: false, error: 'Invalid model test request.' };
+    }
+    try {
+      const prepared = prepareModelConnectionTest(
+        connection,
+        role,
+        apiKey ?? '',
+      );
+      const providerEnvNames = new Set([
+        'ANTHROPIC_API_KEY',
+        'GEMINI_API_KEY',
+        'GOOGLE_API_KEY',
+        'OPENAI_API_KEY',
+        'TINFOIL_API_KEY',
+        'HOSTED_VLLM_API_KEY',
+        'HOSTED_VLLM_API_BASE',
+        'LM_STUDIO_HOST',
+        'OA_TICKET_FILE',
+        'OA_DESTINATION',
+        'OA_BASE_URL',
+      ]);
+      const childEnv = {
+        ...Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([name]) => !providerEnvNames.has(name),
+          ),
+        ),
+        ...prepared.env,
+        PYTHONIOENCODING: 'utf-8',
+      };
+      const executable = app.isPackaged
+        ? path.join(
+            process.resourcesPath,
+            'service-dist',
+            'tutor-server',
+            `tutor-server${process.platform === 'win32' ? '.exe' : ''}`,
+          )
+        : 'uv';
+      const args = app.isPackaged
+        ? [
+            '--test-model-connection',
+            '--model',
+            prepared.connection.model,
+            ...(role === 'sensing' ? ['--include-image'] : []),
+          ]
+        : [
+            'run',
+            'python',
+            '-m',
+            'proactive_tutor.model_connection_test',
+            '--model',
+            prepared.connection.model,
+            ...(role === 'sensing' ? ['--include-image'] : []),
+          ];
+      const cwd = app.isPackaged
+        ? path.dirname(executable)
+        : path.resolve(process.cwd(), '..');
+      const result = await new Promise<{
+        code: number | null;
+        stdout: string;
+        stderr: string;
+      }>((resolve, reject) => {
+        const child = spawn(executable, args, {
+          cwd,
+          env: childEnv,
+          shell: false,
+        });
+        let stdout = '';
+        let stderr = '';
+        const timer = setTimeout(() => {
+          child.kill();
+          reject(new Error('Connection test timed out after 60 seconds.'));
+        }, 60_000);
+        child.stdout?.on('data', (chunk) => {
+          stdout = `${stdout}${String(chunk)}`.slice(-32_000);
+        });
+        child.stderr?.on('data', (chunk) => {
+          stderr = `${stderr}${String(chunk)}`.slice(-32_000);
+        });
+        child.on('error', (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          resolve({ code, stdout, stderr });
+        });
+      });
+      const parsed = result.stdout
+        .trim()
+        .split('\n')
+        .reverse()
+        .map((line) => {
+          try {
+            return JSON.parse(line) as { success?: boolean; error?: string };
+          } catch {
+            return null;
+          }
+        })
+        .find((item) => item !== null);
+      if (result.code === 0 && parsed?.success) {
+        return {
+          success: true,
+          message:
+            role === 'sensing'
+              ? 'Connected — text and image input accepted.'
+              : 'Connected — text input accepted.',
+        };
+      }
+      const rawError = parsed?.error || result.stderr.trim() || 'Connection failed.';
+      const redactedError = apiKey
+        ? rawError.split(apiKey).join('[redacted]')
+        : rawError;
+      return { success: false, error: redactedError };
+    } catch (err) {
+      const rawError = (err as Error).message;
+      return {
+        success: false,
+        error: apiKey ? rawError.split(apiKey).join('[redacted]') : rawError,
+      };
+    }
+  },
+);
+
+async function restoreSessionAfterModelRestart(): Promise<void> {
+  if (!currentSessionId) return;
+  const conversation = readConversations().find(
+    (item) => item.sessionId === currentSessionId,
+  );
+  const tutorPort = process.env.TUTOR_PORT || '8081';
+  const sensingPort = process.env.SENSING_PORT || '8080';
+  const tutor = `http://127.0.0.1:${tutorPort}`;
+  const sensing = `http://127.0.0.1:${sensingPort}`;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await Promise.all([
+        axios.get(`${tutor}/health`, { timeout: 1000 }),
+        axios.get(`${sensing}/health`, { timeout: 1000 }),
+      ]);
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  const { aiTools, scenario, customObserverPrompt } = readProfile();
+  await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
+  await axios.post(
+    `${tutor}/context/problem_statement`,
+    { problem_statement: conversation?.problem || pendingTaskLabel || '' },
+    { timeout: 8000 },
+  );
+  await axios.post(
+    `${tutor}/context/ai_tools`,
+    { ai_tools: aiTools },
+    { timeout: 8000 },
+  );
+  const memory = readLocalMemory();
+  if (memory) {
+    await axios.post(`${tutor}/context/memory`, { memory }, { timeout: 8000 });
+  }
+  if (conversation) {
+    await axios.post(
+      `${tutor}/context/conversation`,
+      {
+        messages: conversation.messages
+          .filter((message) => !message.isError)
+          .map(({ role, text }) => ({ role, text })),
+      },
+      { timeout: 8000 },
+    );
+  }
+  await axios.post(
+    `${sensing}/session`,
+    {
+      node_uuid: currentSessionId,
+      struggle_detection_seconds: 120,
+      scenario,
+      config_source: 'model_settings_restart',
+      ...(customObserverPrompt && {
+        custom_observer_prompt: customObserverPrompt,
+      }),
+    },
+    { timeout: 15000 },
+  );
+}
+
+ipcMain.handle(
+  'save-model-configuration',
+  async (_event, input: ModelConfigurationInput) => {
+    try {
+      const config = saveModelConfiguration(input);
+      const runtime = resolveModelRuntime();
+      if (observerStarted && runtime) {
+        const defaultTutorModel = defaultTutor(runtime.config);
+        const activeTutorModel =
+          runtime.config.tutors.find(
+            (item) => item.id === currentTutorModelId,
+          ) ?? defaultTutorModel;
+        currentTutorModelId = activeTutorModel.id;
+        process.env.TUTOR_MODEL = defaultTutorModel.model;
+        process.env.OBSERVER_MODEL = runtime.config.sensing.model;
+        await Promise.all([
+          serviceManager.stopService('tutor-server'),
+          serviceManager.stopService('sensing-server'),
+        ]);
+        serviceManager.configureServiceEnv(
+          'tutor-server',
+          runtime.tutorEnv,
+          true,
+        );
+        serviceManager.configureServiceEnv(
+          'sensing-server',
+          runtime.sensingEnv,
+          true,
+        );
+        serviceManager.configureServiceArg(
+          'tutor-server',
+          'model_name',
+          activeTutorModel.model,
+        );
+        serviceManager.configureServiceArg(
+          'sensing-server',
+          'observer_model',
+          runtime.config.sensing.model,
+        );
+        serviceManager.startService('tutor-server');
+        serviceManager.startService('sensing-server');
+        try {
+          await restoreSessionAfterModelRestart();
+        } catch (err) {
+          log.warn(
+            `[Models] Services restarted but active session restoration failed: ${(err as Error).message}`,
+          );
+        }
+      }
+      return { success: true, config };
+    } catch (err) {
+      log.warn(`[Models] Could not save configuration: ${(err as Error).message}`);
+      return { success: false, error: (err as Error).message };
+    }
+  },
+);
+
+ipcMain.handle(
+  'set-chat-model',
+  async (_event, { modelId }: { modelId?: string } = {}) => {
+    const config = readModelConfiguration();
+    const selected = config?.tutors.find((item) => item.id === modelId);
+    if (!selected) return { success: false, error: 'Tutor model not found.' };
+    const tutorPort = process.env.TUTOR_PORT || '8081';
+    try {
+      await axios.post(
+        `http://127.0.0.1:${tutorPort}/config/model`,
+        { model: selected.model },
+        { timeout: 8000 },
+      );
+      currentTutorModelId = selected.id;
+      return { success: true, modelId: selected.id };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  },
+);
 
 // Persist profile edits made post-onboarding (the Settings surface in the
 // webapp).
@@ -871,10 +1181,12 @@ function readProfile(): {
   aiTools: string[];
   scenario: string;
   customObserverPrompt: string;
+  userName: string;
 } {
   let aiTools: string[] = [];
   let scenario = 'everyday_support';
   let customObserverPrompt = '';
+  let userName = '';
   try {
     const profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
     if (typeof profile.tutorScenario === 'string' && profile.tutorScenario) {
@@ -886,6 +1198,9 @@ function readProfile(): {
     if (typeof profile.customSystemPrompt === 'string' && profile.customSystemPrompt.trim()) {
       customObserverPrompt = profile.customSystemPrompt;
     }
+    if (typeof profile.userName === 'string' && profile.userName.trim()) {
+      userName = profile.userName.trim();
+    }
     // "Custom" mode customizes only the sensing observer prompt. The judge/tutor
     // still run on a real base scenario, so map 'custom' → 'everyday_support'.
     if (scenario === 'custom') {
@@ -894,7 +1209,7 @@ function readProfile(): {
   } catch (err) {
     log.warn(`[Profile] Could not read profile at ${profilePath()}: ${err}.`);
   }
-  return { aiTools, scenario, customObserverPrompt };
+  return { aiTools, scenario, customObserverPrompt, userName };
 }
 
 // ── Instant suggestion precompute cache ─────────────────────────────────────
@@ -1164,6 +1479,9 @@ async function createProactiveTutorSession(
   const sensing = `http://127.0.0.1:${sensingPort}`;
   const tutor = `http://127.0.0.1:${tutorPort}`;
   const sessionId = randomUUID();
+  const modelConfig = readModelConfiguration();
+  const selectedTutor = modelConfig ? defaultTutor(modelConfig) : null;
+  currentTutorModelId = selectedTutor?.id ?? null;
 
   // Open the chat panel immediately so the user always gets a UI, even if a
   // server is still starting up. Configuration below is best-effort.
@@ -1175,6 +1493,13 @@ async function createProactiveTutorSession(
   // Configure the tutor conversation (the chat only needs the tutor server).
   try {
     await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
+    if (selectedTutor) {
+      await axios.post(
+        `${tutor}/config/model`,
+        { model: selectedTutor.model },
+        { timeout: 8000 },
+      );
+    }
     await axios.post(`${tutor}/config/scenario`, { scenario }, { timeout: 8000 });
     await axios.post(
       `${tutor}/context/problem_statement`,
@@ -1241,7 +1566,7 @@ ipcMain.handle('get-chat-conversations', () => readConversations());
 
 ipcMain.removeHandler('save-chat-conversation');
 ipcMain.handle('save-chat-conversation', (_event, payload) => {
-  saveConversation(payload ?? {});
+  saveConversation({ ...(payload ?? {}), tutorModelId: currentTutorModelId });
   return { success: true };
 });
 
@@ -1261,6 +1586,19 @@ ipcMain.handle(
     const { aiTools, scenario } = readProfile();
     try {
       await axios.post(`${tutor}/context/reset`, {}, { timeout: 8000 });
+      const modelConfig = readModelConfiguration();
+      const selectedTutor =
+        modelConfig?.tutors.find(
+          (item) => item.id === conversation.tutorModelId,
+        ) ?? (modelConfig ? defaultTutor(modelConfig) : null);
+      if (selectedTutor) {
+        await axios.post(
+          `${tutor}/config/model`,
+          { model: selectedTutor.model },
+          { timeout: 8000 },
+        );
+        currentTutorModelId = selectedTutor.id;
+      }
       await axios.post(
         `${tutor}/config/scenario`,
         { scenario },
@@ -1296,7 +1634,7 @@ ipcMain.handle(
       currentSessionId = conversation.sessionId;
       isSessionActive = true;
       pendingTaskLabel = conversation.problem;
-      return { success: true };
+      return { success: true, tutorModelId: currentTutorModelId };
     } catch (err) {
       log.warn(
         `[Chat] Could not resume conversation: ${(err as Error).message}`,
@@ -1697,7 +2035,10 @@ const createWindow = async () => {
     await installExtensions();
   }
 
-  if (!isOnboardingComplete()) {
+  const hasLegacyModels = Boolean(
+    process.env.TUTOR_MODEL?.trim() && process.env.OBSERVER_MODEL?.trim(),
+  );
+  if (!isOnboardingComplete() || (!readModelConfiguration() && !hasLegacyModels)) {
     // First launch — show onboarding. The avatar is created after the user
     // completes or skips onboarding (see 'onboarding-complete' handler).
     createOnboardingWindow();
@@ -1727,22 +2068,29 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
 
-// Warning shown when the user hasn't set their models yet. Models are
-// configured via TUTOR_MODEL / OBSERVER_MODEL in the .env file.
+// Warning shown when neither first-launch configuration nor legacy developer
+// environment variables provide both required model roles.
 const showModelsRequiredWarning = () => {
   showNotification({
     message:
-      'Coco is paused. Set TUTOR_MODEL and OBSERVER_MODEL in your .env file, then restart Coco to begin.',
+      'Coco is paused. Open Settings and configure a sensing model and at least one tutor model.',
     actionLabel: 'Got it',
   });
 };
 
-// Effective model ids, read from the environment (TUTOR_MODEL / OBSERVER_MODEL,
-// populated from .env at startup). Empty string when a model is not set.
-const effectiveModels = (): { tutor: string; observer: string } => ({
-  tutor: (process.env.TUTOR_MODEL || '').trim(),
-  observer: (process.env.OBSERVER_MODEL || '').trim(),
-});
+// Effective model ids. Managed app configuration wins when present; legacy
+// developer environment variables remain supported as a fallback.
+const effectiveModels = (): { tutor: string; observer: string } => {
+  const runtime = resolveModelRuntime();
+  return {
+    tutor: (
+      runtime ? defaultTutor(runtime.config).model : process.env.TUTOR_MODEL || ''
+    ).trim(),
+    observer: (
+      runtime?.config.sensing.model || process.env.OBSERVER_MODEL || ''
+    ).trim(),
+  };
+};
 
 // Starts the sensing services and observation stream. Called once onboarding
 // is complete (or immediately on subsequent launches where it's already done),
@@ -1752,9 +2100,8 @@ const startObserver = () => {
   // start-on-save path in update-settings).
   if (observerStarted) return;
 
-  // Gate on model choice: until BOTH a tutor and an observer model are set
-  // (via TUTOR_MODEL / OBSERVER_MODEL in the .env), we do not spawn the Python
-  // services. Instead we surface a warning that tells the user to set them.
+  // Gate on model choice: until BOTH roles are explicitly set, do not spawn
+  // Python services that could otherwise start with an unintended provider.
   const { tutor: tutorModel, observer: observerModel } = effectiveModels();
   if (!tutorModel || !observerModel) {
     log.warn('[Models] No models chosen yet — services not started.');
@@ -1804,6 +2151,23 @@ const startObserver = () => {
   log.info(`[Models] tutor=${tutorModel} observer=${observerModel}`);
 
   try {
+    const runtime = resolveModelRuntime();
+    if (runtime) {
+      const { userName } = readProfile();
+      serviceManager.configureServiceEnv(
+        'tutor-server',
+        runtime.tutorEnv,
+        true,
+      );
+      serviceManager.configureServiceEnv(
+        'sensing-server',
+        {
+          ...runtime.sensingEnv,
+          ...(userName && { COCO_USER_NAME: userName }),
+        },
+        true,
+      );
+    }
     serviceManager.startAll();
   } catch (e) {
     console.warn('Failed to start services:', e);
@@ -1985,7 +2349,11 @@ app
     // Only start the observer if onboarding is already done. If not, it will
     // be started by the 'onboarding-complete' IPC handler after the user
     // finishes or skips onboarding.
-    if (isOnboardingComplete()) {
+    const canStartConfiguredModels = Boolean(
+      readModelConfiguration() ||
+        (process.env.TUTOR_MODEL?.trim() && process.env.OBSERVER_MODEL?.trim()),
+    );
+    if (isOnboardingComplete() && canStartConfiguredModels) {
       hideAvatarMode = readHideAvatarSetting();
       startObserver();
     }

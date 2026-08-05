@@ -13,6 +13,12 @@ def main() -> None:
         memory_mcp_main()
         return
 
+    if sys.argv[1:2] == ["--test-model-connection"]:
+        from proactive_tutor.model_connection_test import main as test_model_main
+
+        test_model_main(sys.argv[2:])
+        return
+
     import chz
     from proactive_tutor.tutor_server import main as tutor_main
 

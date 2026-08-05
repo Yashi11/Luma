@@ -65,9 +65,11 @@ The avatar surfaces observations from the sensing service in three tiers:
 
 ### How the main process orchestrates everything
 
-1. On startup, loads environment from `.env` (repo root in dev, `userData` in prod)
+1. On first launch, collects separate sensing and tutor provider/model settings;
+   credentials are encrypted in Electron's user-data directory
 2. Checks whether onboarding is complete; if not, opens the onboarding window
-3. `ServiceManager` spawns the Python backends (`sensing :8080`, `tutor :8081`) as child processes
+3. `ServiceManager` spawns the Python backends (`sensing :8080`, `tutor :8081`)
+   with role-specific credentials; development `.env` remains supported
 4. An SSE client (`ObservationStream`) connects to `sensing` and forwards observation events to the avatar renderer via IPC
 5. When a Tier-2 bubble appears, the main process precomputes a tutor suggestion in the background so the response is instant when clicked
 6. Chat messages flow through `sensing/observe` (screen context) → `tutor/events` (guidance) → renderer
@@ -81,3 +83,11 @@ The avatar surfaces observations from the sensing service in three tiers:
 | `npm run build:services` | Bundle Python services into `service-dist/` for packaging |
 | `npm run package` | Full production build + electron-builder (DMG / NSIS / AppImage) |
 | `npm test` | Run Jest unit tests |
+
+To test the first-launch flow without changing your normal profile, point the
+development app at a fresh directory:
+
+```bash
+export COCO_TEST_DATA="$(mktemp -d /tmp/coco-model-test.XXXXXX)"
+COCO_DESKTOP_USER_DATA_DIR="$COCO_TEST_DATA" npm start
+```

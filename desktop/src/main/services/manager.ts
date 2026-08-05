@@ -5,6 +5,20 @@ import os from 'os';
 import { app } from 'electron';
 import log from 'electron-log';
 
+const PROVIDER_ENV_NAMES = new Set([
+  'ANTHROPIC_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_API_KEY',
+  'OPENAI_API_KEY',
+  'TINFOIL_API_KEY',
+  'HOSTED_VLLM_API_KEY',
+  'HOSTED_VLLM_API_BASE',
+  'LM_STUDIO_HOST',
+  'OA_TICKET_FILE',
+  'OA_DESTINATION',
+  'OA_BASE_URL',
+]);
+
 export interface ServiceConfig {
   id: string;
   name?: string;
@@ -75,6 +89,10 @@ export class ServiceManager {
   private runtimeServicesRoot: string = '';
 
   private configPath: string | null = null;
+
+  // Managed model configuration supplies each child only the credentials for
+  // its role. Legacy/dev .env startup leaves this false for compatibility.
+  private isolateProviderCredentials = false;
 
   constructor() {
     this.setupExitHandler();
@@ -308,8 +326,16 @@ export class ServiceManager {
     ].join(path.delimiter);
     const augmentedPath = `${extraPaths}${path.delimiter}${process.env.PATH || ''}`;
 
-    let env = {
-      ...process.env,
+    const inheritedEnv = this.isolateProviderCredentials
+      ? Object.fromEntries(
+          Object.entries(process.env).filter(
+            ([name]) => !PROVIDER_ENV_NAMES.has(name),
+          ),
+        )
+      : process.env;
+
+    let env: NodeJS.ProcessEnv = {
+      ...inheritedEnv,
       ...cfgEnvNonEmpty,
       PYTHONIOENCODING: 'utf-8',
       PATH: augmentedPath,
@@ -402,7 +428,7 @@ export class ServiceManager {
       env = {
         ...env,
         ELECTRON_RUN_AS_NODE: '1',
-        PATH: process.env.PATH,
+        PATH: augmentedPath,
         // Only fix LOCALAPPDATA on Windows to prevent cache write errors
         ...(isWin
           ? {
@@ -773,7 +799,9 @@ export class ServiceManager {
       ...envUpdates,
     };
 
-    log.info(`[ServiceManager] updated env for ${id}:`, envUpdates);
+    log.info(
+      `[ServiceManager] updated ${Object.keys(envUpdates).length} environment entries for ${id}`,
+    );
 
     if (svc.process) {
       log.info(`[ServiceManager] restarting ${id} with updated environment`);
@@ -785,6 +813,43 @@ export class ServiceManager {
       log.info(`[ServiceManager] starting ${id} with new environment`);
       this.startService(id);
     }
+  }
+
+  /** Configure a service before initial startup without exposing values in logs. */
+  public configureServiceEnv(
+    id: string,
+    envUpdates: Record<string, string>,
+    isolateProviderCredentials = false,
+  ) {
+    if (this.services.size === 0) this.loadConfig();
+    const svc = this.services.get(id);
+    if (!svc?.config) {
+      throw new Error(`Service ${id} is not configured`);
+    }
+    this.isolateProviderCredentials ||= isolateProviderCredentials;
+    const existing = isolateProviderCredentials
+      ? Object.fromEntries(
+          Object.entries(svc.config.env ?? {}).filter(
+            ([name]) => !PROVIDER_ENV_NAMES.has(name),
+          ),
+        )
+      : svc.config.env;
+    svc.config.env = { ...existing, ...envUpdates };
+    log.info(
+      `[ServiceManager] configured ${Object.keys(envUpdates).length} environment entries for ${id}`,
+    );
+  }
+
+  /** Replace a single --name=value launch argument before a service starts. */
+  public configureServiceArg(id: string, name: string, value: string) {
+    if (this.services.size === 0) this.loadConfig();
+    const svc = this.services.get(id);
+    if (!svc?.config) throw new Error(`Service ${id} is not configured`);
+    const prefix = `--${name}=`;
+    const args = svc.config.args ?? [];
+    svc.config.args = args.some((arg) => arg.startsWith(prefix))
+      ? args.map((arg) => (arg.startsWith(prefix) ? `${prefix}${value}` : arg))
+      : [...args, `${prefix}${value}`];
   }
 
   /** kill all registered children (used on exit) */

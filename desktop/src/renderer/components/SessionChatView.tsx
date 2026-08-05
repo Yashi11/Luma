@@ -143,8 +143,27 @@ interface SavedConversation {
   problem: string;
   createdAt: number;
   updatedAt: number;
+  tutorModelId?: string;
   messages: ChatMessage[];
 }
+
+interface TutorModelOption {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  baseUrl?: string;
+}
+
+const MODEL_PROVIDER_OPTIONS = [
+  ['gemini', 'Google Gemini'],
+  ['openai', 'OpenAI'],
+  ['anthropic', 'Anthropic'],
+  ['tinfoil', 'Tinfoil'],
+  ['hosted_vllm', 'OpenAI-compatible endpoint'],
+  ['lm_studio', 'LM Studio'],
+] as const;
+const MODEL_ENDPOINT_PROVIDERS = new Set(['hosted_vllm', 'lm_studio']);
 
 // crypto.randomUUID needs a secure context; fall back for safety.
 const makeMessageId = (): string =>
@@ -188,6 +207,11 @@ const S: Record<string, React.CSSProperties> = {
   statusDot: { width: 8, height: 8, borderRadius: '50%', background: '#22c55e' },
   sub: { fontSize: 11, color: '#9ca3af', fontWeight: 400 },
   headerBtns: { marginLeft: 'auto', display: 'flex', gap: 2, WebkitAppRegion: 'no-drag' } as React.CSSProperties,
+  modelSelect: {
+    maxWidth: 145, border: `1px solid ${ACCENT_BORDER}`, background: '#fff',
+    color: ACCENT, borderRadius: 7, padding: '3px 6px', fontSize: 11,
+    fontFamily: FONT, WebkitAppRegion: 'no-drag',
+  } as React.CSSProperties,
   iconBtn: {
     border: 'none', background: 'transparent', cursor: 'pointer',
     fontSize: 15, color: '#9ca3af', padding: '3px 7px', borderRadius: 7,
@@ -474,6 +498,14 @@ export default function SessionChatView() {
     aiTools: [],
     hideAvatar: false,
   });
+  const [tutorModels, setTutorModels] = useState<TutorModelOption[]>([]);
+  const [currentTutorModelId, setCurrentTutorModelId] = useState('');
+  const [switchingModel, setSwitchingModel] = useState(false);
+  const [sensingModel, setSensingModel] = useState<TutorModelOption | null>(null);
+  const [defaultTutorModelId, setDefaultTutorModelId] = useState('');
+  const [modelCredentials, setModelCredentials] = useState<Record<string, string>>({});
+  const [modelSaveError, setModelSaveError] = useState('');
+  const [modelSavedFlash, setModelSavedFlash] = useState(false);
   // Editable draft of the settings, synced from the loaded profile.
   const [editScenario, setEditScenario] = useState('everyday_support');
   const [editTools, setEditTools] = useState<string[]>([]);
@@ -711,10 +743,12 @@ export default function SessionChatView() {
   // Session context from main. A new sessionId resets the conversation.
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on('session-init', (data: any) => {
-      const { sessionId, problemStatement } = (data ?? {}) as {
+      const { sessionId, problemStatement, tutorModelId } = (data ?? {}) as {
         sessionId?: string;
         problemStatement?: string;
+        tutorModelId?: string;
       };
+      if (tutorModelId) setCurrentTutorModelId(tutorModelId);
       if (sessionId && sessionId !== sessionIdRef.current) {
         if (sessionIdRef.current && messagesRef.current.length > 0) {
           window.electron?.ipcRenderer
@@ -766,6 +800,24 @@ export default function SessionChatView() {
   // Load the user's onboarding profile (mode + AI tools) for the Settings panel.
   useEffect(() => {
     window.electron?.ipcRenderer
+      .invoke('get-model-configuration')
+      .then((config: any) => {
+        if (!config || !Array.isArray(config.tutors)) return;
+        setTutorModels(config.tutors.map((model: TutorModelOption) => ({
+          ...model,
+          model: model.model.replace(/^hosted_vllm\//, ''),
+        })));
+        setSensingModel(config.sensing
+          ? {
+              ...config.sensing,
+              model: String(config.sensing.model).replace(/^hosted_vllm\//, ''),
+            }
+          : null);
+        setDefaultTutorModelId(config.defaultTutorId || '');
+        setCurrentTutorModelId((current) => current || config.defaultTutorId || '');
+      })
+      .catch(() => {});
+    window.electron?.ipcRenderer
       .invoke('get-profile')
       .then((p: any) => {
         if (!p) return;
@@ -781,6 +833,50 @@ export default function SessionChatView() {
       })
       .catch(() => {});
   }, []);
+
+  const switchTutorModel = async (modelId: string) => {
+    if (!modelId || modelId === currentTutorModelId || switchingModel) return;
+    setSwitchingModel(true);
+    const result = await window.electron?.ipcRenderer.invoke('set-chat-model', {
+      modelId,
+    });
+    if ((result as { success?: boolean })?.success) {
+      setCurrentTutorModelId(modelId);
+      if (sessionIdRef.current && messagesRef.current.length > 0) {
+        window.electron?.ipcRenderer
+          .invoke('save-chat-conversation', {
+            sessionId: sessionIdRef.current,
+            problem: problemRef.current,
+            messages: messagesRef.current,
+          })
+          .catch(() => {});
+      }
+    }
+    setSwitchingModel(false);
+  };
+
+  const saveModelSettings = async () => {
+    if (!sensingModel || tutorModels.length === 0) return;
+    setModelSaveError('');
+    const result = await window.electron?.ipcRenderer.invoke(
+      'save-model-configuration',
+      {
+        sensing: sensingModel,
+        tutors: tutorModels,
+        defaultTutorId: defaultTutorModelId,
+        credentials: modelCredentials,
+      },
+    );
+    if (!(result as { success?: boolean })?.success) {
+      setModelSaveError(
+        (result as { error?: string })?.error || 'Could not save model settings.',
+      );
+      return;
+    }
+    setModelCredentials({});
+    setModelSavedFlash(true);
+    setTimeout(() => setModelSavedFlash(false), 1500);
+  };
 
   const toggleEditTool = (id: string) =>
     setEditTools((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
@@ -926,6 +1022,9 @@ export default function SessionChatView() {
           sessionIdRef.current = conversation.sessionId;
           setProblem(conversation.problem);
           setMessages(conversation.messages);
+          setCurrentTutorModelId(
+            result.tutorModelId || conversation.tutorModelId || currentTutorModelId,
+          );
           setRatings({});
           setReviewing(null);
           setShowHistory(false);
@@ -1016,6 +1115,20 @@ export default function SessionChatView() {
         <span style={S.brand}>
           <span style={S.statusDot} /> Coco <span style={S.sub}>· Session active</span>
         </span>
+        {tutorModels.length > 0 && (
+          <select
+            style={S.modelSelect}
+            aria-label="Tutor model"
+            title="Tutor model for this conversation"
+            value={currentTutorModelId}
+            disabled={switchingModel || sending}
+            onChange={(event) => switchTutorModel(event.target.value)}
+          >
+            {tutorModels.map((model) => (
+              <option key={model.id} value={model.id}>{model.label}</option>
+            ))}
+          </select>
+        )}
         <div style={S.headerBtns}>
           <button
             type="button"
@@ -1070,6 +1183,180 @@ export default function SessionChatView() {
 
       {showSettings && (
         <div style={S.settings}>
+          {sensingModel && (
+            <>
+              <div style={S.groupLabel}>Models &amp; providers</div>
+              <div style={S.helpText}>
+                The sensing model receives screenshots. Its credential is kept
+                separate from every tutor credential. Saving changes restarts
+                the local sensing and tutor services.
+              </div>
+              <div style={S.customForm}>
+                <select
+                  style={S.customInput}
+                  value={sensingModel.provider}
+                  onChange={(event) => setSensingModel({
+                    ...sensingModel,
+                    provider: event.target.value,
+                  })}
+                >
+                  {MODEL_PROVIDER_OPTIONS.map(([id, label]) => (
+                    <option key={id} value={id}>{label}</option>
+                  ))}
+                </select>
+                <input
+                  style={S.customInput}
+                  value={sensingModel.model}
+                  placeholder={sensingModel.provider === 'hosted_vllm'
+                    ? 'Exact model ID returned by /v1/models'
+                    : 'Vision-capable sensing model'}
+                  onChange={(event) => setSensingModel({
+                    ...sensingModel,
+                    model: event.target.value,
+                  })}
+                />
+                {MODEL_ENDPOINT_PROVIDERS.has(sensingModel.provider) && (
+                  <input
+                    style={S.customInput}
+                    value={sensingModel.baseUrl ?? ''}
+                    placeholder={sensingModel.provider === 'hosted_vllm'
+                      ? 'OpenAI-compatible base URL, ending in /v1'
+                      : 'LM Studio host'}
+                    onChange={(event) => setSensingModel({
+                      ...sensingModel,
+                      baseUrl: event.target.value,
+                    })}
+                  />
+                )}
+                {sensingModel.provider !== 'lm_studio' && (
+                  <input
+                    style={S.customInput}
+                    type="password"
+                    value={modelCredentials[`sensing:${sensingModel.provider}`] ?? ''}
+                    placeholder={sensingModel.provider === 'hosted_vllm'
+                      ? 'Endpoint API key (optional; blank keeps the saved key)'
+                      : 'Replace sensing API key (leave blank to keep it)'}
+                    onChange={(event) => setModelCredentials((current) => ({
+                      ...current,
+                      [`sensing:${sensingModel.provider}`]: event.target.value,
+                    }))}
+                  />
+                )}
+              </div>
+
+              <div style={S.groupLabel}>Tutor models</div>
+              {tutorModels.map((model, index) => (
+                <div key={model.id} style={S.customForm}>
+                  <input
+                    style={S.customInput}
+                    value={model.label}
+                    placeholder="Display name"
+                    onChange={(event) => setTutorModels((current) =>
+                      current.map((item, i) => i === index
+                        ? { ...item, label: event.target.value }
+                        : item))}
+                  />
+                  <select
+                    style={S.customInput}
+                    value={model.provider}
+                    onChange={(event) => setTutorModels((current) =>
+                      current.map((item, i) => i === index
+                        ? { ...item, provider: event.target.value }
+                        : item))}
+                  >
+                    {MODEL_PROVIDER_OPTIONS.map(([id, label]) => (
+                      <option key={id} value={id}>{label}</option>
+                    ))}
+                  </select>
+                  <input
+                    style={S.customInput}
+                    value={model.model}
+                    placeholder={model.provider === 'hosted_vllm'
+                      ? 'Exact model ID returned by /v1/models'
+                      : 'Tutor model ID'}
+                    onChange={(event) => setTutorModels((current) =>
+                      current.map((item, i) => i === index
+                        ? { ...item, model: event.target.value }
+                        : item))}
+                  />
+                  {MODEL_ENDPOINT_PROVIDERS.has(model.provider) && (
+                    <input
+                      style={S.customInput}
+                      value={model.baseUrl ?? ''}
+                      placeholder={model.provider === 'hosted_vllm'
+                        ? 'OpenAI-compatible base URL, ending in /v1'
+                        : 'LM Studio host'}
+                      onChange={(event) => setTutorModels((current) =>
+                        current.map((item, i) => i === index
+                          ? { ...item, baseUrl: event.target.value }
+                          : item))}
+                    />
+                  )}
+                  {model.provider !== 'lm_studio' && (
+                    <input
+                      style={S.customInput}
+                      type="password"
+                      value={modelCredentials[`tutor:${model.provider}`] ?? ''}
+                      placeholder={model.provider === 'hosted_vllm'
+                        ? 'Endpoint API key (optional; blank keeps the saved key)'
+                        : 'Replace tutor API key (leave blank to keep it)'}
+                      onChange={(event) => setModelCredentials((current) => ({
+                        ...current,
+                        [`tutor:${model.provider}`]: event.target.value,
+                      }))}
+                    />
+                  )}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5 }}>
+                    <label>
+                      <input
+                        type="radio"
+                        checked={defaultTutorModelId === model.id}
+                        onChange={() => setDefaultTutorModelId(model.id)}
+                      />{' '}Default
+                    </label>
+                    {tutorModels.length > 1 && (
+                      <button
+                        type="button"
+                        style={{ border: 'none', background: 'none', color: '#b91c1c', cursor: 'pointer' }}
+                        onClick={() => {
+                          const next = tutorModels.filter((item) => item.id !== model.id);
+                          setTutorModels(next);
+                          if (defaultTutorModelId === model.id) setDefaultTutorModelId(next[0].id);
+                        }}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <button
+                type="button"
+                style={S.addBtn}
+                onClick={() => {
+                  const id = `tutor-${Date.now()}`;
+                  setTutorModels((current) => [
+                    ...current,
+                    { id, label: '', provider: 'anthropic', model: '' },
+                  ]);
+                }}
+              >
+                + Add tutor model
+              </button>
+              <div style={{ ...S.saveRow, marginBottom: 14 }}>
+                <button type="button" style={S.saveBtn} onClick={saveModelSettings}>
+                  Save model settings
+                </button>
+                {modelSavedFlash && <span style={S.saved}>✓ Saved</span>}
+              </div>
+              {modelSaveError && (
+                <div style={{ color: '#b91c1c', fontSize: 11.5, marginBottom: 12 }}>
+                  {modelSaveError}
+                </div>
+              )}
+              <div style={S.sectionDivider} />
+            </>
+          )}
           <div style={S.groupLabel}>Desktop</div>
           <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
             <input

@@ -44,6 +44,10 @@ export type Channels =
   // Onboarding
   | 'onboarding-complete'
   | 'get-profile'
+  | 'get-model-configuration'
+  | 'test-model-connection'
+  | 'save-model-configuration'
+  | 'set-chat-model'
   // Settings (post-onboarding profile edits)
   | 'save-profile'
   | 'update-settings'
@@ -104,9 +108,6 @@ const electronHandler = {
     // Expose webUtils.getPathForFile to get the real file path in the renderer process
     // This is necessary because the File object in the browser/renderer does not expose the full path for security reasons
     getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  },
-  env: {
-    get: (key: string) => process.env[key],
   },
   benchmark: {
     downloadFile: (

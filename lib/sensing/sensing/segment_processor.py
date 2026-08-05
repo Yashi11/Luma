@@ -191,13 +191,14 @@ def _observe(
         "max_tokens": max_tokens,
         "operation": "observer",
     }
-    if model.startswith("hosted_vllm/"):
+    hosted_model = model.removeprefix("hosted_vllm/").lower()
+    # Disable reasoning for sensing model
+    if hosted_model.startswith("thinkingmachines/inkling"):
+        completion_kwargs["reasoning_effort"] = "none"
+    if "qwen" in hosted_model:
         completion_kwargs["extra_body"] = {
             "chat_template_kwargs": {"enable_thinking": False}
         }
-        hosted_model = model.removeprefix("hosted_vllm/").lower()
-        if hosted_model.startswith("thinkingmachines/inkling"):
-            completion_kwargs["reasoning_effort"] = "none"
 
     result, metrics = chat_completion(**completion_kwargs)
 
