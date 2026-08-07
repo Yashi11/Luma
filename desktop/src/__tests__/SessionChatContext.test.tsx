@@ -442,6 +442,11 @@ describe('deferred suggestion context', () => {
 
   it('restores the active transcript after a renderer reload', async () => {
     const listeners = new Map<string, (data: unknown) => void>();
+    const writeText = jest.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
     const savedConversation = {
       sessionId: 'active-session',
       problem: 'Review prior literature',
@@ -490,6 +495,19 @@ describe('deferred suggestion context', () => {
     expect(
       screen.getByText('from huggingface_hub import snapshot_download'),
     ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy tutor message' }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        savedConversation.messages[1].text.trim(),
+      );
+      expect(screen.getByText('Copied ✓')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy user message' }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenLastCalledWith(savedConversation.messages[0].text);
+    });
   });
 
   it('waits for the user to send a message before calling the tutor', async () => {

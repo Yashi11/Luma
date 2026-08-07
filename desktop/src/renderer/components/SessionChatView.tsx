@@ -137,6 +137,17 @@ interface ChatMessage {
   retryImages?: string[];
 }
 
+function copyableMessageText(message: ChatMessage): string {
+  if (message.role === 'tutor' && !message.isError) {
+    return parseGuidance(message.text).text;
+  }
+  return message.text;
+}
+
+function messageCopyKey(message: ChatMessage, index: number): string {
+  return `${message.role}:${message.id ?? message.ts ?? index}`;
+}
+
 interface SavedConversation {
   sessionId: string;
   title?: string;
@@ -298,6 +309,9 @@ const S: Record<string, React.CSSProperties> = {
   hotkeyHint: { marginTop: 6, fontSize: 11, color: '#9ca3af', fontFamily: FONT, textAlign: 'center' },
   hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
   feedbackRow: { display: 'flex', gap: 2, marginTop: 4 },
+  userMessageActions: { display: 'flex', justifyContent: 'flex-end', marginTop: 3 },
+  copyMessageBtn: { border: 'none', background: 'transparent', borderRadius: 6, padding: '1px 5px', color: '#9ca3af', fontFamily: FONT, fontSize: 10.5, lineHeight: '18px', cursor: 'pointer' },
+  copyMessageBtnDone: { color: '#16a34a', fontWeight: 700 },
   metricRow: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, color: '#6b7280', fontSize: 10.5 },
   metricChip: { border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 6, padding: '1px 5px', lineHeight: 1.35 },
   toolStack: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 7 },
@@ -579,6 +593,7 @@ export default function SessionChatView() {
   const [memoryFlash, setMemoryFlash] = useState(false);
   // One thumbs vote per tutor message, keyed by message id.
   const [ratings, setRatings] = useState<Record<string, 'up' | 'down'>>({});
+  const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   const pendingContextRef = useRef<string | null>(null);
@@ -651,6 +666,20 @@ export default function SessionChatView() {
       latency_s: m.ts ? (Date.now() - m.ts) / 1000 : null,
       text: m.text,
     });
+  };
+
+  const copyMessage = async (message: ChatMessage, key: string) => {
+    const text = copyableMessageText(message).trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedMessageKey(key);
+      window.setTimeout(() => {
+        setCopiedMessageKey((current) => (current === key ? null : current));
+      }, 1500);
+    } catch {
+      // Leave the button unchanged if the OS clipboard rejects the write.
+    }
   };
 
   const scrollToBottom = useCallback(() => {
@@ -1973,17 +2002,37 @@ export default function SessionChatView() {
           // eslint-disable-next-line react/no-array-index-key
           <div key={i} style={m.role === 'user' ? S.userRow : S.tutorRow}>
             {m.role === 'user' ? (
-              <div style={S.userBubble}>
-                {m.text}
-                {m.images && m.images.length > 0 && (
-                  <div style={S.thumbRow}>
-                    {m.images.map((src, j) => (
-                      // eslint-disable-next-line react/no-array-index-key
-                      <img key={j} src={src} alt="pasted" style={S.thumb} />
-                    ))}
+              <>
+                <div style={S.userBubble}>
+                  {m.text}
+                  {m.images && m.images.length > 0 && (
+                    <div style={S.thumbRow}>
+                      {m.images.map((src, j) => (
+                        // eslint-disable-next-line react/no-array-index-key
+                        <img key={j} src={src} alt="pasted" style={S.thumb} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {m.text.trim() && (
+                  <div style={S.userMessageActions}>
+                    <button
+                      type="button"
+                      style={{
+                        ...S.copyMessageBtn,
+                        ...(copiedMessageKey === messageCopyKey(m, i)
+                          ? S.copyMessageBtnDone
+                          : {}),
+                      }}
+                      aria-label="Copy user message"
+                      title="Copy message"
+                      onClick={() => void copyMessage(m, messageCopyKey(m, i))}
+                    >
+                      {copiedMessageKey === messageCopyKey(m, i) ? 'Copied ✓' : 'Copy'}
+                    </button>
                   </div>
                 )}
-              </div>
+              </>
             ) : (
               <>
                 <div style={S.tutorAvatar}>C</div>
@@ -2023,28 +2072,44 @@ export default function SessionChatView() {
                       tutorMetrics={m.tutorMetrics}
                     />
                   )}
-                  {!m.isError && m.id && (
+                  {(m.text.trim() || (!m.isError && m.id)) && (
                     <div style={S.feedbackRow}>
-                      {(['up', 'down'] as const).map((dir) => (
+                      {m.text.trim() && (
                         <button
-                          key={dir}
                           type="button"
-                          aria-label={dir === 'up' ? 'Helpful' : 'Not helpful'}
-                          title={dir === 'up' ? 'Helpful' : 'Not helpful'}
-                          disabled={!!ratings[m.id as string]}
                           style={{
-                            ...S.feedbackBtn,
-                            ...(ratings[m.id as string] === dir
-                              ? S.feedbackBtnRated
-                              : ratings[m.id as string]
-                                ? S.feedbackBtnLocked
-                                : {}),
+                            ...S.copyMessageBtn,
+                            ...(copiedMessageKey === messageCopyKey(m, i)
+                              ? S.copyMessageBtnDone
+                              : {}),
                           }}
-                          onClick={() => rateMessage(m, dir)}
+                          aria-label="Copy tutor message"
+                          title="Copy message"
+                          onClick={() => void copyMessage(m, messageCopyKey(m, i))}
                         >
-                          {dir === 'up' ? '👍' : '👎'}
+                          {copiedMessageKey === messageCopyKey(m, i) ? 'Copied ✓' : 'Copy'}
                         </button>
-                      ))}
+                      )}
+                      {!m.isError && m.id && (['up', 'down'] as const).map((dir) => (
+                          <button
+                            key={dir}
+                            type="button"
+                            aria-label={dir === 'up' ? 'Helpful' : 'Not helpful'}
+                            title={dir === 'up' ? 'Helpful' : 'Not helpful'}
+                            disabled={!!ratings[m.id as string]}
+                            style={{
+                              ...S.feedbackBtn,
+                              ...(ratings[m.id as string] === dir
+                                ? S.feedbackBtnRated
+                                : ratings[m.id as string]
+                                  ? S.feedbackBtnLocked
+                                  : {}),
+                            }}
+                            onClick={() => rateMessage(m, dir)}
+                          >
+                            {dir === 'up' ? '👍' : '👎'}
+                          </button>
+                        ))}
                     </div>
                   )}
                 </div>
