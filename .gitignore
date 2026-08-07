@@ -29,9 +29,11 @@ htmlcov/
 # Secrets / local config
 .env
 .env.local
+.env.signing.local
 *.pem
 gcp_credentials.json
 *credentials*.json
+desktop/.env.signing.local
 
 # Node / Electron
 node_modules/
@@ -55,3 +57,7 @@ records_debug*/
 
 # OS
 .DS_Store
+
+exp/
+profiling/
+lib/personalization

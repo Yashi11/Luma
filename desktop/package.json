@@ -111,7 +111,6 @@
     "transformIgnorePatterns": []
   },
   "dependencies": {
-    "@electron/notarize": "^3.0.0",
     "axios": "^1.6.0",
     "dotenv": "^17.4.1",
     "electron-debug": "^4.1.0",
@@ -196,7 +195,6 @@
     "appId": "io.github.collaborative-agents.coco",
     "asar": true,
     "compression": "maximum",
-    "afterSign": ".erb/scripts/notarize.mjs",
     "asarUnpack": "**\\*.{node,dll}",
     "files": [
       "dist",
@@ -207,7 +205,10 @@
     ],
     "mac": {
       "icon": "assets/icon.icns",
-      "notarize": false,
+      "forceCodeSigning": true,
+      "notarize": true,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist",
       "target": {
         "target": "default",
         "arch": [
@@ -216,7 +217,7 @@
         ]
       },
       "type": "distribution",
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "gatekeeperAssess": false
     },
     "dmg": {
