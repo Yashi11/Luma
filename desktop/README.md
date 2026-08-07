@@ -66,7 +66,8 @@ The avatar surfaces observations from the sensing service in three tiers:
 ### How the main process orchestrates everything
 
 1. On first launch, collects separate sensing and tutor provider/model settings;
-   credentials are encrypted in Electron's user-data directory
+   credentials are stored in a plaintext configuration file protected with
+   owner-only permissions (`chmod 600`) in Electron's user-data directory
 2. Checks whether onboarding is complete; if not, opens the onboarding window
 3. `ServiceManager` spawns the Python backends (`sensing :8080`, `tutor :8081`)
    with role-specific credentials; development `.env` remains supported

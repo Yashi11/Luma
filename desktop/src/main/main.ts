@@ -12,6 +12,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { randomUUID } from 'crypto';
+import { createServer } from 'net';
 import { exec, spawn } from 'child_process';
 import {
   app,
@@ -74,6 +75,9 @@ import type {
 const dotenv = require('dotenv');
 
 app.setName('coco');
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
 
 // A dedicated development override makes first-launch testing reliable through
 // npm's nested webpack/electronmon process tree. Chromium's --user-data-dir
@@ -201,6 +205,71 @@ let pendingTaskLabel: string | null = null;
 let currentTutorModelId: string | null = null;
 // Invite timing is owned by the sensing-side judge; no renderer-side cooldown.
 
+const requestedPort = (value: string | undefined, fallback: number): number => {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535
+    ? parsed
+    : fallback;
+};
+
+const canBindPort = (port: number): Promise<boolean> =>
+  new Promise((resolve) => {
+    const server = createServer();
+    server.unref();
+    server.once('error', () => resolve(false));
+    server.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
+      server.close(() => resolve(true));
+    });
+  });
+
+const findAvailablePort = async (
+  preferred: number,
+  excluded: Set<number>,
+): Promise<number> => {
+  if (!excluded.has(preferred) && await canBindPort(preferred)) return preferred;
+  for (let candidate = 49152; candidate <= 65535; candidate += 1) {
+    if (!excluded.has(candidate) && await canBindPort(candidate)) return candidate;
+  }
+  throw new Error('Coco could not find an available local service port.');
+};
+
+const configureLocalServicePorts = async (): Promise<void> => {
+  const requestedSensingPort = requestedPort(process.env.SENSING_PORT, 8080);
+  const requestedTutorPort = requestedPort(process.env.TUTOR_PORT, 8081);
+  const selected = new Set<number>();
+  const sensingPort = await findAvailablePort(requestedSensingPort, selected);
+  selected.add(sensingPort);
+  const tutorPort = await findAvailablePort(requestedTutorPort, selected);
+
+  process.env.SENSING_PORT = String(sensingPort);
+  process.env.TUTOR_PORT = String(tutorPort);
+  serviceManager.configureServiceArg('sensing-server', 'port', String(sensingPort));
+  serviceManager.configureServiceArg('tutor-server', 'port', String(tutorPort));
+  serviceManager.configureServiceArg(
+    'sensing-server',
+    'tutor_url',
+    `http://127.0.0.1:${tutorPort}`,
+  );
+  const portEnv = {
+    SENSING_PORT: String(sensingPort),
+    TUTOR_PORT: String(tutorPort),
+  };
+  serviceManager.configureServiceEnv('sensing-server', portEnv);
+  serviceManager.configureServiceEnv('tutor-server', portEnv);
+
+  if (
+    sensingPort !== requestedSensingPort ||
+    tutorPort !== requestedTutorPort
+  ) {
+    log.warn(
+      `[Ports] Requested sensing=${requestedSensingPort}, tutor=${requestedTutorPort}; ` +
+      `using sensing=${sensingPort}, tutor=${tutorPort} because a port was occupied.`,
+    );
+  } else {
+    log.info(`[Ports] sensing=${sensingPort}, tutor=${tutorPort}`);
+  }
+};
+
 // Preload path helper
 const preloadPath = () =>
   app.isPackaged
@@ -212,7 +281,7 @@ const preloadPath = () =>
 // Centered modal; after the user completes or skips it, the profile is written
 // and the normal avatar + webapp windows are created.
 
-const createOnboardingWindow = () => {
+const createOnboardingWindow = (modelsOnly = false) => {
   const { width: sw, height: sh } = screen.getPrimaryDisplay().workAreaSize;
   const w = 440;
   const h = 700;
@@ -233,7 +302,9 @@ const createOnboardingWindow = () => {
     webPreferences: { preload: preloadPath() },
   });
 
-  const url = `${resolveHtmlPath('index.html')}?view=onboarding`;
+  const url = `${resolveHtmlPath('index.html')}?view=onboarding${
+    modelsOnly ? '&modelsOnly=1' : ''
+  }`;
   onboardingWindow.loadURL(url);
 
   onboardingWindow.on('ready-to-show', () => {
@@ -242,6 +313,15 @@ const createOnboardingWindow = () => {
 
   onboardingWindow.on('closed', () => {
     onboardingWindow = null;
+  });
+
+  onboardingWindow.on('close', (event) => {
+    if (isQuitting || (isOnboardingComplete() && readModelConfiguration())) {
+      return;
+    }
+    event.preventDefault();
+    onboardingWindow?.hide();
+    createTray();
   });
 };
 
@@ -301,6 +381,8 @@ const createAvatarWindow = () => {
 
 const CHAT_PANEL_W = 420;
 const CHAT_EXPANDED_W = 820;
+const CHAT_CONTENT_ZOOM_LEVELS = [0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+let chatContentZoomFactor = 1;
 
 const createChatWindow = () => {
   if (chatWindow && !chatWindow.isDestroyed()) return;
@@ -322,6 +404,49 @@ const createChatWindow = () => {
   });
 
   chatWindow.loadURL(`${resolveHtmlPath('index.html')}?view=session`);
+
+  const reportChatContentZoom = () => {
+    if (!chatWindow || chatWindow.isDestroyed()) return;
+    chatWindow.webContents.send(
+      'chat-content-zoom-factor',
+      chatContentZoomFactor,
+    );
+  };
+  chatWindow.webContents.setZoomFactor(1);
+  void chatWindow.webContents.setVisualZoomLevelLimits(1, 1);
+  chatWindow.webContents.on('before-input-event', (event, input) => {
+    if (
+      input.type === 'keyDown' &&
+      (input.meta || input.control) &&
+      ['+', '-', '=', '0'].includes(input.key)
+    ) {
+      event.preventDefault();
+      const currentIndex = CHAT_CONTENT_ZOOM_LEVELS.reduce(
+        (closest, level, index) =>
+          Math.abs(level - chatContentZoomFactor) <
+          Math.abs(CHAT_CONTENT_ZOOM_LEVELS[closest] - chatContentZoomFactor)
+            ? index
+            : closest,
+        0,
+      );
+      if (input.key === '0') {
+        chatContentZoomFactor = 1;
+      } else if (input.key === '+' || input.key === '=') {
+        chatContentZoomFactor = CHAT_CONTENT_ZOOM_LEVELS[
+          Math.min(currentIndex + 1, CHAT_CONTENT_ZOOM_LEVELS.length - 1)
+        ];
+      } else {
+        chatContentZoomFactor = CHAT_CONTENT_ZOOM_LEVELS[
+          Math.max(currentIndex - 1, 0)
+        ];
+      }
+      reportChatContentZoom();
+    }
+  });
+  chatWindow.webContents.on('did-finish-load', () => {
+    chatWindow?.webContents.setZoomFactor(1);
+    reportChatContentZoom();
+  });
 
   // Closing hides rather than destroys so the in-memory conversation survives a
   // reopen; the avatar always comes back to the foreground. On a real app quit
@@ -398,6 +523,23 @@ async function openCoco(): Promise<void> {
   await createProactiveTutorSession(problemStatement, 120);
 }
 
+function setupPending(): boolean {
+  return !isOnboardingComplete() || !readModelConfiguration();
+}
+
+function openPrimaryTrayAction(): void {
+  if (setupPending()) {
+    if (!onboardingWindow || onboardingWindow.isDestroyed()) {
+      createOnboardingWindow(isOnboardingComplete());
+    } else {
+      onboardingWindow.show();
+      onboardingWindow.focus();
+    }
+    return;
+  }
+  openCoco().catch((err) => log.warn(`[Tray] Could not open Coco: ${err}`));
+}
+
 function trayIconPath(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'assets', 'icon.png')
@@ -405,20 +547,28 @@ function trayIconPath(): string {
 }
 
 function createTray(): void {
-  if (tray && !tray.isDestroyed()) return;
-  const image = nativeImage.createFromPath(trayIconPath()).resize({
-    width: 22,
-    height: 22,
-  });
-  tray = new Tray(image);
+  if (!tray || tray.isDestroyed()) {
+    const image = nativeImage.createFromPath(trayIconPath()).resize({
+      width: 22,
+      height: 22,
+    });
+    tray = new Tray(image);
+    tray.on('click', openPrimaryTrayAction);
+  }
   tray.setToolTip('Coco');
+  const pendingSetup = setupPending();
   tray.setContextMenu(
-    Menu.buildFromTemplate([
+    Menu.buildFromTemplate(pendingSetup ? [
+      {
+        label: isOnboardingComplete() ? 'Open Model Setup' : 'Continue Setup',
+        click: openPrimaryTrayAction,
+      },
+      { type: 'separator' },
+      { label: 'Quit', click: () => app.quit() },
+    ] : [
       {
         label: 'Open Chat',
-        click: () => {
-          openCoco().catch((err) => log.warn(`[Tray] Could not open Coco: ${err}`));
-        },
+        click: openPrimaryTrayAction,
       },
       {
         label: 'Open History',
@@ -635,22 +785,118 @@ ipcMain.handle('get-profile', () => {
   }
 });
 
+ipcMain.handle('get-chat-content-zoom-factor', () => chatContentZoomFactor);
+
 // Model/provider configuration is owned by the main process. The renderer sees
 // only masked credential status; plaintext keys are accepted on save and never
 // returned over IPC.
 ipcMain.handle('get-model-configuration', () => getModelConfigurationView());
 
-ipcMain.handle('get-service-health', async () => {
-  const checkService = async (url: string) => {
+type ModelHealthAssessment = {
+  status:
+    | 'verified'
+    | 'failed'
+    | 'legacy_unassessed'
+    | 'not_configured';
+  detail: string;
+};
+const modelHealthCache = new Map<
+  string,
+  { checkedAt: number; assessment: ModelHealthAssessment }
+>();
+const modelHealthInFlight = new Map<string, Promise<ModelHealthAssessment>>();
+const MODEL_HEALTH_CACHE_MS = 30 * 60 * 1000;
+
+ipcMain.handle(
+  'get-service-health',
+  async (
+    _event,
+    { forceModelTest = false }: { forceModelTest?: boolean } = {},
+  ) => {
+  type ModelAssessment = {
+    status: ModelHealthAssessment['status'];
+    detail: string;
+  };
+  const savedConfig = readModelConfiguration();
+  const assessModelConfiguration = async (
+    role: 'sensing' | 'tutor',
+  ): Promise<ModelAssessment> => {
+    const connection = role === 'sensing'
+      ? savedConfig?.sensing
+      : savedConfig?.tutors.find((item) => item.id === currentTutorModelId) ??
+        savedConfig?.tutors.find((item) => item.id === savedConfig.defaultTutorId);
+    if (connection) {
+      const cacheKey = `${role}:${JSON.stringify(connection)}`;
+      const cached = modelHealthCache.get(cacheKey);
+      if (
+        !forceModelTest &&
+        cached &&
+        Date.now() - cached.checkedAt < MODEL_HEALTH_CACHE_MS
+      ) {
+        return cached.assessment;
+      }
+      const existingTest = modelHealthInFlight.get(cacheKey);
+      if (existingTest) return existingTest;
+      const test = (async (): Promise<ModelHealthAssessment> => {
+        const result = await testModelConnection(null, { role, connection });
+        const assessment: ModelHealthAssessment = result.success
+          ? {
+              status: 'verified',
+              detail: result.message || 'Model connection verified.',
+            }
+          : {
+              status: 'failed',
+              detail: result.error || 'The model connection test failed.',
+            };
+        modelHealthCache.set(cacheKey, { checkedAt: Date.now(), assessment });
+        return assessment;
+      })();
+      modelHealthInFlight.set(cacheKey, test);
+      try {
+        return await test;
+      } finally {
+        modelHealthInFlight.delete(cacheKey);
+      }
+    }
+    const legacyModel = role === 'sensing'
+      ? process.env.OBSERVER_MODEL
+      : process.env.TUTOR_MODEL;
+    if (legacyModel?.trim()) {
+      return {
+        status: 'legacy_unassessed',
+        detail: 'Model uses environment settings and cannot be assessed here.',
+      };
+    }
+    return {
+      status: 'not_configured',
+      detail: 'No model configuration was found.',
+    };
+  };
+
+  const checkService = async (
+    url: string,
+    expectedService: 'coco-sensing' | 'coco-tutor',
+    modelAssessment: ModelAssessment,
+  ) => {
     try {
       const response = await axios.get(url, { timeout: 2500 });
       const data = response.data as {
         status?: unknown;
+        service?: unknown;
         total_actions?: unknown;
       };
+      if (data?.service !== expectedService) {
+        return {
+          connected: false,
+          status: 'wrong-service',
+          detail: 'This port is occupied by another process.',
+          modelAssessment,
+        };
+      }
       return {
         connected: true,
         status: typeof data?.status === 'string' ? data.status : 'healthy',
+        modelAssessment,
         ...(typeof data?.total_actions === 'number'
           ? { totalActions: data.total_actions }
           : {}),
@@ -676,24 +922,40 @@ ipcMain.handle('get-service-health', async () => {
       } else if (error instanceof Error) {
         detail = error.message;
       }
-      return { connected: false, status: 'unavailable', detail };
+      return {
+        connected: false,
+        status: 'unavailable',
+        detail,
+        modelAssessment,
+      };
     }
   };
 
   const sensingPort = process.env.SENSING_PORT || '8080';
   const tutorPort = process.env.TUTOR_PORT || '8081';
+  const [sensingAssessment, tutorAssessment] = await Promise.all([
+    assessModelConfiguration('sensing'),
+    assessModelConfiguration('tutor'),
+  ]);
   const [sensing, tutor] = await Promise.all([
-    checkService(`http://127.0.0.1:${sensingPort}/health`),
-    checkService(`http://127.0.0.1:${tutorPort}/health`),
+    checkService(
+      `http://127.0.0.1:${sensingPort}/health`,
+      'coco-sensing',
+      sensingAssessment,
+    ),
+    checkService(
+      `http://127.0.0.1:${tutorPort}/health`,
+      'coco-tutor',
+      tutorAssessment,
+    ),
   ]);
 
   return { checkedAt: Date.now(), sensing, tutor };
-});
+  },
+);
 
-ipcMain.handle(
-  'test-model-connection',
-  async (
-    _event,
+async function testModelConnection(
+    _event: unknown,
     {
       role,
       connection,
@@ -703,7 +965,7 @@ ipcMain.handle(
       connection?: ModelConnection;
       apiKey?: string;
     } = {},
-  ) => {
+  ): Promise<{ success: boolean; message?: string; error?: string }> {
     if ((role !== 'sensing' && role !== 'tutor') || !connection) {
       return { success: false, error: 'Invalid model test request.' };
     }
@@ -826,8 +1088,9 @@ ipcMain.handle(
         error: apiKey ? rawError.split(apiKey).join('[redacted]') : rawError,
       };
     }
-  },
-);
+  }
+
+ipcMain.handle('test-model-connection', testModelConnection);
 
 async function restoreSessionAfterModelRestart(): Promise<void> {
   if (!currentSessionId) return;
@@ -896,6 +1159,7 @@ ipcMain.handle(
   async (_event, input: ModelConfigurationInput) => {
     try {
       const config = saveModelConfiguration(input);
+      modelHealthCache.clear();
       const runtime = resolveModelRuntime();
       if (observerStarted && runtime) {
         const defaultTutorModel = defaultTutor(runtime.config);
@@ -996,7 +1260,22 @@ ipcMain.on('onboarding-complete', (_event, profile: object) => {
 
   // Onboarding window closes itself (window.close() in renderer). Start the
   // avatar now that setup is complete; the chat panel is created on demand.
-  createAvatarWindow();
+  applyAvatarVisibility(readHideAvatarSetting());
+});
+
+ipcMain.removeAllListeners('hide-onboarding');
+ipcMain.on('hide-onboarding', () => {
+  onboardingWindow?.hide();
+  createTray();
+});
+
+ipcMain.removeAllListeners('model-configuration-complete');
+ipcMain.on('model-configuration-complete', () => {
+  // Existing users sent directly to model setup already have a profile. Once
+  // models are saved, start (or restart) the services and reveal the app
+  // without making them repeat the rest of onboarding.
+  startObserver();
+  applyAvatarVisibility(readHideAvatarSetting());
 });
 
 // The chat renderer announces (on mount) that its hot-key-capture listener is
@@ -2134,13 +2413,18 @@ const createWindow = async () => {
     await installExtensions();
   }
 
-  const hasLegacyModels = Boolean(
-    process.env.TUTOR_MODEL?.trim() && process.env.OBSERVER_MODEL?.trim(),
-  );
-  if (!isOnboardingComplete() || (!readModelConfiguration() && !hasLegacyModels)) {
+  const onboardingComplete = isOnboardingComplete();
+  const modelConfiguration = readModelConfiguration();
+  if (!onboardingComplete) {
     // First launch — show onboarding. The avatar is created after the user
     // completes or skips onboarding (see 'onboarding-complete' handler).
     createOnboardingWindow();
+    createTray();
+  } else if (!modelConfiguration) {
+    // Legacy environment variables may be sufficient to start the services,
+    // but users still need an explicit, inspectable model configuration.
+    createOnboardingWindow(true);
+    createTray();
   } else {
     applyAvatarVisibility(readHideAvatarSetting());
   }
@@ -2159,6 +2443,20 @@ app.on('window-all-closed', () => {
   // after all windows have been closed
   if (process.platform !== 'darwin' && !hideAvatarMode) {
     app.quit();
+  }
+});
+
+app.on('second-instance', () => {
+  if (onboardingWindow && !onboardingWindow.isDestroyed()) {
+    onboardingWindow.show();
+    onboardingWindow.focus();
+  } else if (chatWindow && !chatWindow.isDestroyed()) {
+    showChatPanel();
+  } else if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.show();
+    avatarWindow.focus();
+  } else {
+    openPrimaryTrayAction();
   }
 });
 
@@ -2415,7 +2713,8 @@ const startObserver = () => {
 
 app
   .whenReady()
-  .then(() => {
+  .then(async () => {
+    await configureLocalServicePorts();
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');
       observationSleepGuard.suspend();

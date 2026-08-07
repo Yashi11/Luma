@@ -94,6 +94,10 @@ export class ServiceManager {
   // its role. Legacy/dev .env startup leaves this false for compatibility.
   private isolateProviderCredentials = false;
 
+  private isShuttingDown = false;
+
+  private shutdownPromise: Promise<void> | null = null;
+
   constructor() {
     this.setupExitHandler();
     this.initializePaths();
@@ -116,7 +120,16 @@ export class ServiceManager {
 
   /** register a spawned child process into the global registry */
   public registerProcess(id: string, proc: ChildProcess, cfg?: ServiceConfig) {
-    this.services.set(id, { process: proc, config: cfg, status: 'running' });
+    const existing = this.services.get(id);
+    if (existing) {
+      existing.process = proc;
+      existing.status = 'running';
+      // Preserve the loaded service configuration, including restart policy;
+      // spawn metadata is only a fallback for directly registered processes.
+      if (!existing.config && cfg) existing.config = cfg;
+    } else {
+      this.services.set(id, { process: proc, config: cfg, status: 'running' });
+    }
 
     proc.on('error', (err) => {
       log.error(`[ServiceManager] child ${id} error`, err);
@@ -265,6 +278,10 @@ export class ServiceManager {
 
   /** start a single service by id (uses registered config) */
   public startService(id: string) {
+    if (this.isShuttingDown) {
+      log.info(`[ServiceManager] skipping ${id}: shutdown is in progress`);
+      return;
+    }
     const svc = this.services.get(id);
     if (!svc || !svc.config) {
       log.warn(`[ServiceManager] no config for service ${id}`);
@@ -599,6 +616,9 @@ export class ServiceManager {
     }
     const spawnOpts: any = {
       cwd,
+      // A separate Unix process group lets shutdown signal the uv/Python tree,
+      // not only the immediate wrapper process.
+      detached: process.platform !== 'win32',
       env: {
         ...process.env,
         PATH: process.env.PATH,
@@ -706,15 +726,15 @@ export class ServiceManager {
     const s = this.services.get(id);
     if (!s) return;
 
-    if (!s.process) {
-      s.status = 'stopped';
-      return;
-    }
-
     // cancel pending restart if any
     if (s.restartTimer) {
       clearTimeout(s.restartTimer);
       s.restartTimer = null;
+    }
+
+    if (!s.process) {
+      s.status = 'stopped';
+      return;
     }
 
     const proc = s.process;
@@ -738,7 +758,7 @@ export class ServiceManager {
     try {
       // attempt graceful termination
       try {
-        proc.kill('SIGTERM' as any);
+        ServiceManager.signalProcessTree(proc, 'SIGTERM');
       } catch (e) {
         log.warn(`[ServiceManager] failed to send SIGTERM to ${id}`, e);
       }
@@ -750,7 +770,7 @@ export class ServiceManager {
           `[ServiceManager] ${id} did not exit within ${timeoutMs}ms — sending SIGKILL`,
         );
         try {
-          proc.kill('SIGKILL' as any);
+          ServiceManager.signalProcessTree(proc, 'SIGKILL');
         } catch (e) {
           log.warn(`[ServiceManager] failed to send SIGKILL to ${id}`, e);
         }
@@ -866,6 +886,19 @@ export class ServiceManager {
    * @param timeoutMs maximum milliseconds to wait before giving up (default 10s)
    */
   public async shutdown(timeoutMs = 10_000) {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.isShuttingDown = true;
+    this.services.forEach((service) => {
+      if (service.restartTimer) {
+        clearTimeout(service.restartTimer);
+        service.restartTimer = null;
+      }
+    });
+    this.shutdownPromise = this.performShutdown(timeoutMs);
+    return this.shutdownPromise;
+  }
+
+  private async performShutdown(timeoutMs: number): Promise<void> {
     try {
       // ask all services to stop (they have per-service timeouts)
       const stopPromise = this.killAll();
@@ -888,7 +921,7 @@ export class ServiceManager {
         );
         remaining.forEach(([id, s]) => {
           try {
-            s.process?.kill('SIGKILL' as any);
+            if (s.process) ServiceManager.signalProcessTree(s.process, 'SIGKILL');
           } catch (e) {
             log.warn(`[ServiceManager] failed to SIGKILL ${id}`, e);
           }
@@ -905,18 +938,44 @@ export class ServiceManager {
     }
   }
 
-  private setupExitHandler() {
-    const onExit = async () => {
+  private static signalProcessTree(
+    proc: ChildProcess,
+    signal: NodeJS.Signals,
+  ): void {
+    if (process.platform !== 'win32' && proc.pid) {
       try {
-        await this.killAll();
-      } catch (e) {
-        log.warn('[ServiceManager] error while killing children on exit', e);
+        process.kill(-proc.pid, signal);
+        return;
+      } catch {
+        // The process may have exited or may not own a process group. Fall
+        // through to signaling the direct child.
       }
+    }
+    proc.kill(signal);
+  }
+
+  private forceKillAllSync(): void {
+    this.isShuttingDown = true;
+    this.services.forEach((service) => {
+      if (service.restartTimer) clearTimeout(service.restartTimer);
+      service.restartTimer = null;
+      if (!service.process) return;
+      try {
+        ServiceManager.signalProcessTree(service.process, 'SIGKILL');
+      } catch {
+        // The process is already gone.
+      }
+    });
+  }
+
+  private setupExitHandler() {
+    const onSignal = () => {
+      void this.shutdown().finally(() => process.exit(0));
     };
 
-    process.on('exit', onExit);
-    process.on('SIGINT', onExit);
-    process.on('SIGTERM', onExit);
+    process.on('exit', () => this.forceKillAllSync());
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
   }
 }
 

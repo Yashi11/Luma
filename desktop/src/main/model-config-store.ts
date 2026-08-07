@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { app, safeStorage } from 'electron';
+import { app } from 'electron';
 
 export type ProviderId =
   | 'gemini'
@@ -75,7 +75,7 @@ export const PROVIDERS: Record<
 const configPath = () =>
   path.join(app.getPath('userData'), 'coco-model-config.json');
 const credentialsPath = () =>
-  path.join(app.getPath('userData'), 'coco-model-credentials.bin');
+  path.join(app.getPath('userData'), 'coco-model-credentials.json');
 
 export const credentialId = (
   role: 'sensing' | 'tutor',
@@ -148,20 +148,10 @@ export function validateModelConfiguration(
 
 function readCredentials(): CredentialMap {
   try {
-    if (!secureStorageAvailable()) return {};
-    const encrypted = fs.readFileSync(credentialsPath());
-    return JSON.parse(safeStorage.decryptString(encrypted)) as CredentialMap;
+    return JSON.parse(fs.readFileSync(credentialsPath(), 'utf8')) as CredentialMap;
   } catch {
     return {};
   }
-}
-
-function secureStorageAvailable(): boolean {
-  if (!safeStorage.isEncryptionAvailable()) return false;
-  return !(
-    process.platform === 'linux' &&
-    safeStorage.getSelectedStorageBackend() === 'basic_text'
-  );
 }
 
 function atomicWrite(file: string, data: string | Buffer): void {
@@ -169,16 +159,11 @@ function atomicWrite(file: string, data: string | Buffer): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(temp, data, { mode: 0o600 });
   fs.renameSync(temp, file);
+  fs.chmodSync(file, 0o600);
 }
 
 function writeCredentials(credentials: CredentialMap): void {
-  if (!secureStorageAvailable()) {
-    throw new Error('Secure credential storage is unavailable on this system.');
-  }
-  atomicWrite(
-    credentialsPath(),
-    safeStorage.encryptString(JSON.stringify(credentials)),
-  );
+  atomicWrite(credentialsPath(), `${JSON.stringify(credentials, null, 2)}\n`);
 }
 
 export function readModelConfiguration(): ModelConfiguration | null {
@@ -245,7 +230,7 @@ export function saveModelConfiguration(
 
   if (
     Object.keys(credentials).length > 0 ||
-    (secureStorageAvailable() && fs.existsSync(credentialsPath()))
+    fs.existsSync(credentialsPath())
   ) {
     writeCredentials(credentials);
   }

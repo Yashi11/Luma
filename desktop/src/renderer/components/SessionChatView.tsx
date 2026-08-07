@@ -160,6 +160,10 @@ interface ServiceHealth {
   status: string;
   detail?: string;
   totalActions?: number;
+  modelAssessment?: {
+    status: 'verified' | 'failed' | 'legacy_unassessed' | 'not_configured';
+    detail: string;
+  };
 }
 
 interface ServiceHealthView {
@@ -225,29 +229,34 @@ const S: Record<string, React.CSSProperties> = {
     boxShadow: '0 8px 32px rgba(0,0,0,0.18)', border: `1px solid ${BORDER}`,
     color: '#111827',
   },
+  contentViewport: { flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' },
+  scalableContent: { display: 'flex', flexDirection: 'column', minHeight: 0, transformOrigin: 'top left' },
   header: {
-    display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px',
+    display: 'flex', alignItems: 'center', gap: 8, padding: '9px 10px',
     background: '#f9fafb', borderBottom: `1px solid ${BORDER}`,
     WebkitAppRegion: 'drag', // draggable region for the frameless window
   } as React.CSSProperties,
-  brand: { display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, fontSize: 13, color: '#374151' },
-  statusDot: { width: 8, height: 8, borderRadius: '50%', background: '#22c55e' },
-  sub: { fontSize: 11, color: '#9ca3af', fontWeight: 400 },
-  headerBtns: { marginLeft: 'auto', display: 'flex', gap: 2, WebkitAppRegion: 'no-drag' } as React.CSSProperties,
+  brand: { display: 'flex', alignItems: 'center', gap: 7, flex: '1 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', fontWeight: 700, fontSize: 13, color: '#374151' },
+  statusDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0 },
+  sub: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, color: '#9ca3af', fontWeight: 400 },
+  healthHeaderButton: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', fontFamily: FONT, fontSize: 11, lineHeight: 1.2, fontWeight: 700, whiteSpace: 'nowrap', WebkitAppRegion: 'no-drag' } as React.CSSProperties,
+  headerBtns: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, WebkitAppRegion: 'no-drag' } as React.CSSProperties,
   modelSelect: {
-    maxWidth: 145, border: `1px solid ${ACCENT_BORDER}`, background: '#fff',
+    width: 120, minWidth: 120, maxWidth: 120,
+    border: `1px solid ${ACCENT_BORDER}`, background: '#fff',
     color: ACCENT, borderRadius: 7, padding: '3px 6px', fontSize: 11,
     fontFamily: FONT, WebkitAppRegion: 'no-drag',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   } as React.CSSProperties,
   iconBtn: {
     border: 'none', background: 'transparent', cursor: 'pointer',
-    fontSize: 15, color: '#9ca3af', padding: '3px 7px', borderRadius: 7,
+    fontSize: 15, color: '#9ca3af', padding: '3px 5px', borderRadius: 7,
   },
   iconBtnActive: { background: ACCENT_BG, color: ACCENT },
   newSessionBtn: {
     border: `1px solid ${ACCENT_BORDER}`, background: '#fff', cursor: 'pointer',
     fontSize: 11.5, color: ACCENT, padding: '3px 8px', borderRadius: 7,
-    fontFamily: FONT, fontWeight: 600,
+    fontFamily: FONT, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
   },
   historyPanel: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#fff' },
   historyPanelHeader: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', borderBottom: `1px solid ${BORDER}` },
@@ -274,6 +283,8 @@ const S: Record<string, React.CSSProperties> = {
   exampleBtn: { marginTop: 6, border: `1px solid ${ACCENT_BORDER}`, background: '#fff', borderRadius: 8, padding: '3px 9px', fontSize: 11, cursor: 'pointer', color: ACCENT },
   viz: { marginTop: 8, width: '100%', height: 280, border: `1px solid ${BORDER}`, borderRadius: 10, background: '#fff' },
   composer: { borderTop: `1px solid ${BORDER}`, padding: 10, background: '#fff' },
+  composerModelRow: { display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 },
+  composerModelLabel: { color: '#6b7280', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' },
   pendingContext: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '6px 8px', border: `1px solid ${ACCENT_BORDER}`, borderRadius: 8, background: ACCENT_BG, color: ACCENT, fontSize: 11.5 },
   pendingContextText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   pendingContextX: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: '0 2px', fontFamily: FONT, fontSize: 14, lineHeight: 1 },
@@ -516,6 +527,7 @@ export default function SessionChatView() {
   const [startingNewSession, setStartingNewSession] = useState(false);
   const [problem, setProblem] = useState('');
   const [expanded, setExpanded] = useState(false);
+  const [contentZoomFactor, setContentZoomFactor] = useState(1);
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -573,12 +585,29 @@ export default function SessionChatView() {
   const messagesRef = useRef<ChatMessage[]>([]);
   const problemRef = useRef('');
 
-  const refreshServiceHealth = useCallback(async () => {
+  useEffect(() => {
+    const applyZoomFactor = (value: unknown) => {
+      const factor = Number(value);
+      if (Number.isFinite(factor) && factor > 0) setContentZoomFactor(factor);
+    };
+    window.electron?.ipcRenderer
+      .invoke('get-chat-content-zoom-factor')
+      .then(applyZoomFactor)
+      .catch(() => {});
+    const cleanup = window.electron?.ipcRenderer.on(
+      'chat-content-zoom-factor',
+      applyZoomFactor,
+    );
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
+
+  const refreshServiceHealth = useCallback(async (forceModelTest = false) => {
     setHealthLoading(true);
     setHealthError('');
     try {
       const result = await window.electron?.ipcRenderer.invoke(
         'get-service-health',
+        { forceModelTest },
       ) as ServiceHealthView | undefined;
       if (!result?.sensing || !result?.tutor) {
         throw new Error('No health response received.');
@@ -1053,9 +1082,12 @@ export default function SessionChatView() {
   }, [showSettings]);
 
   useEffect(() => {
-    if (!showSettings) return;
     void refreshServiceHealth();
-  }, [showSettings, refreshServiceHealth]);
+    const interval = window.setInterval(() => {
+      void refreshServiceHealth();
+    }, 30000);
+    return () => window.clearInterval(interval);
+  }, [refreshServiceHealth]);
 
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on(
@@ -1238,27 +1270,114 @@ export default function SessionChatView() {
       message.role === 'tutor' &&
       message.toolCalls?.some((call) => call.status === 'running'),
   );
+  const selectedTutorModel = tutorModels.find(
+    (model) => model.id === currentTutorModelId,
+  );
+  const selectedTutorProvider = MODEL_PROVIDER_OPTIONS.find(
+    ([id]) => id === selectedTutorModel?.provider,
+  )?.[1] ?? selectedTutorModel?.provider;
+  const selectedTutorTooltip = selectedTutorModel
+    ? [
+        selectedTutorModel.label,
+        `Provider: ${selectedTutorProvider}`,
+        `Model: ${selectedTutorModel.model}`,
+        ...(selectedTutorModel.baseUrl
+          ? [`Endpoint: ${selectedTutorModel.baseUrl}`]
+          : []),
+      ].join('\n')
+    : 'Tutor model for this conversation';
+  const sensingUnavailable = serviceHealth?.sensing.connected === false;
+  const tutorUnavailable = serviceHealth?.tutor.connected === false;
+  const serviceUnavailable = sensingUnavailable || tutorUnavailable;
+  const modelUnavailable = Boolean(serviceHealth && [
+    serviceHealth.sensing,
+    serviceHealth.tutor,
+  ].some((health) => health.modelAssessment?.status === 'failed'));
+  const modelsVerified = Boolean(serviceHealth && [
+    serviceHealth.sensing,
+    serviceHealth.tutor,
+  ].every((health) => health.modelAssessment?.status === 'verified'));
+  const modelConfigurationIssue = Boolean(serviceHealth && [
+    serviceHealth.sensing,
+    serviceHealth.tutor,
+  ].some((health) =>
+    health.modelAssessment?.status === 'legacy_unassessed' ||
+    health.modelAssessment?.status === 'not_configured'));
+  const chatHealthLabel = serviceUnavailable
+    ? 'Service issue'
+    : modelUnavailable
+      ? 'Model issue'
+      : modelConfigurationIssue
+        ? 'Configure models'
+        : serviceHealth
+          ? (modelsVerified ? 'Connected' : 'Services reachable')
+          : healthLoading
+            ? 'Checking health…'
+            : 'Health unknown';
+  const chatHealthColor = serviceUnavailable || modelUnavailable
+    ? '#dc2626'
+    : modelConfigurationIssue
+      ? '#b45309'
+      : modelsVerified
+        ? '#16a34a'
+        : '#6b7280';
+  const chatHealthTitle = serviceUnavailable
+    ? [
+        sensingUnavailable ? 'Sensing server is not reachable.' : '',
+        tutorUnavailable ? 'Tutor agent is not reachable.' : '',
+        'Click to open Settings.',
+      ].filter(Boolean).join(' ')
+    : modelUnavailable
+      ? [
+          serviceHealth?.sensing.modelAssessment?.status === 'failed'
+            ? `Sensing model: ${serviceHealth.sensing.modelAssessment.detail}`
+            : '',
+          serviceHealth?.tutor.modelAssessment?.status === 'failed'
+            ? `Tutor model: ${serviceHealth.tutor.modelAssessment.detail}`
+            : '',
+          'Click to open Settings.',
+        ].filter(Boolean).join(' ')
+      : modelConfigurationIssue
+        ? 'A saved model configuration is required. Click to open Settings.'
+        : serviceHealth
+          ? 'Local services and configured models passed their connection tests.'
+          : 'Checking local service health.';
+  const hasChatHealthIssue = serviceUnavailable || modelUnavailable || modelConfigurationIssue;
 
   return (
     <div style={S.root}>
-      <div style={S.header}>
+      <div
+        role="banner"
+        style={S.header}
+      >
         <span style={S.brand}>
-          <span style={S.statusDot} /> Coco <span style={S.sub}>· Session active</span>
+          <span
+            role="status"
+            aria-label={chatHealthLabel}
+            style={{ ...S.statusDot, background: chatHealthColor }}
+            title={chatHealthTitle}
+          />
+          Coco
+          {hasChatHealthIssue ? (
+            <button
+              type="button"
+              style={{ ...S.healthHeaderButton, color: chatHealthColor }}
+              title={chatHealthTitle}
+              aria-label={`${chatHealthLabel}. Open Settings`}
+              onClick={() => {
+                setShowHistory(false);
+                setReviewing(null);
+                setShowSettings(true);
+              }}
+            >
+              · {chatHealthLabel}
+            </button>
+          ) : (
+            <span style={S.sub} title={chatHealthTitle}>
+              · {chatHealthLabel}
+            </span>
+          )}
         </span>
-        {tutorModels.length > 0 && (
-          <select
-            style={S.modelSelect}
-            aria-label="Tutor model"
-            title="Tutor model for this conversation"
-            value={currentTutorModelId}
-            disabled={switchingModel || sending}
-            onChange={(event) => switchTutorModel(event.target.value)}
-          >
-            {tutorModels.map((model) => (
-              <option key={model.id} value={model.id}>{model.label}</option>
-            ))}
-          </select>
-        )}
         <div style={S.headerBtns}>
           <button
             type="button"
@@ -1311,37 +1430,73 @@ export default function SessionChatView() {
         </div>
       </div>
 
+      <div style={S.contentViewport}>
+        <div
+          data-testid="chat-scalable-content"
+          style={{
+            ...S.scalableContent,
+            transform: `scale(${contentZoomFactor})`,
+            width: `${100 / contentZoomFactor}%`,
+            height: `${100 / contentZoomFactor}%`,
+          }}
+        >
+
       {showSettings && (
         <div style={S.settings}>
           <div style={S.groupLabel}>Health</div>
           <div style={S.helpText}>
-            Check whether Coco's local sensing server and tutor agent are
-            reachable.
+            Checks Coco's local services and sends short real requests to the
+            configured models. The sensing test includes a small test image.
           </div>
           <div style={S.healthList}>
             {([
               ['sensing', 'Sensing server', serviceHealth?.sensing],
               ['tutor', 'Tutor agent', serviceHealth?.tutor],
             ] as const).map(([key, label, health]) => {
-              const statusLabel = health
-                ? (health.connected ? 'Connected' : 'Not connected')
-                : (healthLoading ? 'Checking…' : 'Not checked');
-              const detail = health?.detail || (
-                key === 'sensing' && typeof health?.totalActions === 'number'
-                  ? `${health.totalActions} actions processed`
-                  : ''
+              const serviceStatusLabel = health
+                ? `${health.connected ? 'Connected' : 'Not connected'} (service)`
+                : `${healthLoading ? 'Checking…' : 'Not checked'} (service)`;
+              const modelAssessment = health?.modelAssessment;
+              const modelStatusLabel = modelAssessment
+                ? modelAssessment.status === 'verified'
+                  ? 'Connected (model)'
+                  : modelAssessment.status === 'failed'
+                    ? 'Not connected (model)'
+                    : modelAssessment.status === 'not_configured'
+                      ? 'Not configured (model)'
+                      : 'Not assessed (model)'
+                : `${healthLoading ? 'Checking…' : 'Not checked'} (model)`;
+              const modelDetail = modelAssessment?.detail
+                ?.replace(/^Connected\s*[—-]\s*/i, '')
+                .replace(/^Connected\.?$/i, '');
+              const details = [
+                serviceStatusLabel,
+                health?.detail,
+                `${modelStatusLabel}${modelDetail ? ` — ${modelDetail}` : ''}`,
+              ].filter(Boolean);
+              const hasHealthIssue = Boolean(
+                health && (
+                  !health.connected || modelAssessment?.status === 'failed'
+                ),
+              );
+              const isFullyConnected = Boolean(
+                health?.connected && modelAssessment?.status === 'verified',
               );
               return (
                 <div
                   key={key}
                   style={S.healthRow}
-                  aria-label={`${label}: ${statusLabel}`}
+                  aria-label={`${label}: ${serviceStatusLabel}; ${modelStatusLabel}`}
                 >
                   <span
                     style={{
                       ...S.healthDot,
                       background: health
-                        ? (health.connected ? '#22c55e' : '#ef4444')
+                        ? (hasHealthIssue
+                          ? '#ef4444'
+                          : isFullyConnected
+                            ? '#22c55e'
+                            : '#f59e0b')
                         : '#d1d5db',
                     }}
                   />
@@ -1349,10 +1504,15 @@ export default function SessionChatView() {
                     <div style={S.healthName}>{label}</div>
                     <div style={{
                       ...S.healthDetail,
-                      color: health?.connected ? '#16a34a' : undefined,
+                      color: hasHealthIssue
+                        ? '#dc2626'
+                        : isFullyConnected
+                          ? '#16a34a'
+                          : health
+                            ? '#b45309'
+                            : undefined,
                     }}>
-                      {statusLabel}
-                      {detail ? ` · ${detail}` : ''}
+                      {details.join(' · ')}
                     </div>
                   </div>
                 </div>
@@ -1364,7 +1524,7 @@ export default function SessionChatView() {
               type="button"
               style={{ ...S.addBtn, ...(healthLoading ? S.sendBtnDisabled : {}) }}
               disabled={healthLoading}
-              onClick={() => void refreshServiceHealth()}
+              onClick={() => void refreshServiceHealth(true)}
             >
               {healthLoading ? 'Checking…' : 'Check again'}
             </button>
@@ -1384,8 +1544,9 @@ export default function SessionChatView() {
           <div style={S.groupLabel}>Models &amp; providers</div>
           <div style={S.helpText}>
             The sensing model receives screenshots. Its credential is kept
-            separate from every tutor credential. Saving changes restarts
-            the local sensing and tutor services.
+            separate from every tutor credential. API keys are stored locally
+            in a plaintext file protected with owner-only permissions (chmod
+            600). Saving changes restarts the local sensing and tutor services.
           </div>
           {modelConfigLoading && (
             <div style={{ ...S.helpText, marginTop: 8 }}>Loading model settings…</div>
@@ -1933,6 +2094,23 @@ export default function SessionChatView() {
             ))}
           </div>
         )}
+        {tutorModels.length > 0 && (
+          <div style={S.composerModelRow} data-testid="composer-model-selector">
+            <span style={S.composerModelLabel}>Tutor model</span>
+            <select
+              style={S.modelSelect}
+              aria-label="Tutor model"
+              title={selectedTutorTooltip}
+              value={currentTutorModelId}
+              disabled={switchingModel || sending}
+              onChange={(event) => switchTutorModel(event.target.value)}
+            >
+              {tutorModels.map((model) => (
+                <option key={model.id} value={model.id}>{model.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div style={S.inputRow}>
           <textarea
             style={S.textarea}
@@ -1958,6 +2136,8 @@ export default function SessionChatView() {
       </div>
         </>
       )}
+        </div>
+      </div>
     </div>
   );
 }

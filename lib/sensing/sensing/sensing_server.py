@@ -124,6 +124,7 @@ class StatusResponse(BaseModel):
     """Response model for server status."""
 
     status: str
+    service: str = "coco-sensing"
     total_actions: int
 
 
@@ -252,7 +253,7 @@ async def health_check():
     if streamer is None:
         raise HTTPException(status_code=503, detail="Streamer not initialized")
     total = await streamer.get_total_stored_actions()
-    return StatusResponse(status="healthy", total_actions=total)
+    return StatusResponse(status="healthy", service="coco-sensing", total_actions=total)
 
 
 @app.post("/guidance_delivered", response_model=StatusResponse)

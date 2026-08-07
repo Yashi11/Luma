@@ -23,6 +23,8 @@ export type Channels =
   | 'set-user-id'
   | 'toggle-float-window'
   | 'float-window-state'
+  | 'get-chat-content-zoom-factor'
+  | 'chat-content-zoom-factor'
   | 'open-chat-settings'
   // Proactive session flow
   | 'session-active'
@@ -44,6 +46,8 @@ export type Channels =
   | 'hotkey-capture-ready'
   // Onboarding
   | 'onboarding-complete'
+  | 'model-configuration-complete'
+  | 'hide-onboarding'
   | 'get-profile'
   | 'get-model-configuration'
   | 'get-service-health'

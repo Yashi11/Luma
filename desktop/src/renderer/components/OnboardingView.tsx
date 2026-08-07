@@ -169,7 +169,8 @@ function StepModels({
       <div className="ob-sub">
         The sensing model reads your screen to detect when help may be useful
         and curate context. Tutor models generate proactive suggestions and
-        chat responses only when needed.
+        chat responses only when needed. API keys are stored locally in a
+        plaintext file protected with owner-only permissions (chmod 600).
       </div>
       <ModelFields
         value={sensing}
@@ -929,6 +930,7 @@ function Step8({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function OnboardingView() {
+  const modelsOnly = new URLSearchParams(window.location.search).get('modelsOnly') === '1';
   const [step, setStep] = useState(0);
   const [showProceedModal, setShowProceedModal] = useState(false);
   const [modelError, setModelError] = useState('');
@@ -1047,16 +1049,18 @@ export default function OnboardingView() {
       prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
     );
 
-  const stepKeys = [
-    'models',
-    'intro0',
-    'howto',
-    'ask',
-    'mode',
-    'toolkit',
-    'memory',
-    'summary',
-  ];
+  const stepKeys = modelsOnly
+    ? ['models']
+    : [
+        'models',
+        'intro0',
+        'howto',
+        'ask',
+        'mode',
+        'toolkit',
+        'memory',
+        'summary',
+      ];
   const totalSteps = stepKeys.length;
   const currentKey = stepKeys[Math.min(step, totalSteps - 1)];
 
@@ -1102,6 +1106,11 @@ export default function OnboardingView() {
         setModelError(
           (result as { error?: string })?.error || 'Could not save model configuration.',
         );
+        return;
+      }
+      if (modelsOnly) {
+        window.electron?.ipcRenderer.sendMessage('model-configuration-complete');
+        window.close();
         return;
       }
     }
@@ -1171,8 +1180,19 @@ export default function OnboardingView() {
         <div className="ob-header">
           <div className="ob-brand">
             <span className="ob-brand-dot" />
-            <span className="ob-brand-name">Getting started</span>
+            <span className="ob-brand-name">
+              {modelsOnly ? 'Model setup' : 'Getting started'}
+            </span>
           </div>
+          <button
+            type="button"
+            className="ob-close-btn"
+            aria-label="Close setup for now"
+            title="Close for now"
+            onClick={() => window.electron?.ipcRenderer.sendMessage('hide-onboarding')}
+          >
+            ×
+          </button>
         </div>
 
         {/* Progress */}
@@ -1270,9 +1290,12 @@ export default function OnboardingView() {
             <button
               type="button"
               className="ob-btn ob-btn-green"
-              onClick={() => sendProfile(false)}
+              onClick={modelsOnly ? handleNext : () => sendProfile(false)}
+              disabled={savingModels}
             >
-              Start Coco 🐾
+              {modelsOnly
+                ? (savingModels ? 'Saving…' : 'Save & start Coco 🐾')
+                : 'Start Coco 🐾'}
             </button>
           ) : (
             <button
