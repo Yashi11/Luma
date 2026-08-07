@@ -18,6 +18,7 @@ uv.lock
 # PyInstaller
 *.manifest
 *.spec
+!scripts/packaging/coco_services.spec
 
 # Test / coverage
 .pytest_cache/

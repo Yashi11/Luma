@@ -667,7 +667,7 @@ ipcMain.handle(
         ? path.join(
             process.resourcesPath,
             'service-dist',
-            'tutor-server',
+            'coco-services',
             `tutor-server${process.platform === 'win32' ? '.exe' : ''}`,
           )
         : 'uv';

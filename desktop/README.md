@@ -80,7 +80,7 @@ The avatar surfaces observations from the sensing service in three tiers:
 |---|---|
 | `npm start` | Dev mode — webpack-dev-server on `:1212` + Electron with hot reload |
 | `npm run build` | Production webpack build (main + renderer) |
-| `npm run build:services` | Bundle Python services into `service-dist/` for packaging |
+| `npm run build:services` | Bundle both Python executables into one shared `service-dist/coco-services/` runtime |
 | `npm run package` | Full production build + electron-builder (DMG / NSIS / AppImage) |
 | `npm test` | Run Jest unit tests |
 

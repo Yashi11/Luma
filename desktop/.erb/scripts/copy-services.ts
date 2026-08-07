@@ -61,7 +61,7 @@ interface ProdConfig {
  * Transformation rules:
  * 1. Python services (type: "python" or command: "uv"/"python"):
  *    - Development: Use uv/python to run source code modules
- *    - Production: Use PyInstaller bundled executable (filename = service.id)
+ *    - Production: Use the service executable from the shared PyInstaller bundle
  *
  * 2. Node services (type: "node" or command: "npm"/"node"):
  *    - Development: Use npm/node to run source code
@@ -98,11 +98,12 @@ function transformServiceToProduction(service: DevServiceConfig): ProdServiceCon
 
   // Apply transformation rules based on service type
   if (isPythonService) {
-    // Python service: use PyInstaller-bundled executable.
-    // The binary name matches the service id (e.g. "sensing-server").
+    // Python services are separate executables that share one PyInstaller
+    // _internal directory. They still run as independent OS processes.
     // On Windows, PyInstaller produces .exe; on macOS/Linux, no extension.
     const exeSuffix = process.platform === 'win32' ? '.exe' : '';
-    base.command = '${SERVICE_DIST_ROOT}/' + service.id + '/' + service.id + exeSuffix;
+    const sharedServiceDir = '${SERVICE_DIST_ROOT}/coco-services';
+    base.command = `${sharedServiceDir}/${service.id}${exeSuffix}`;
     // Strip the "uv run python -m <module>" prefix from args, keep only CLI flags.
     const rawArgs = service.args || [];
     const cliArgs: string[] = [];
@@ -117,7 +118,7 @@ function transformServiceToProduction(service: DevServiceConfig): ProdServiceCon
       cliArgs.push(arg);
     }
     base.args = cliArgs;
-    base.cwd = '${SERVICE_DIST_ROOT}/' + service.id;
+    base.cwd = sharedServiceDir;
     base.logPath = '${ELECTRON_UI_ROOT}/logs/' + service.id + '.log';
     base.shell = service.shell ?? true;
   } else if (isNodeService) {

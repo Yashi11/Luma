@@ -204,7 +204,7 @@
       "!**/*.md"
     ],
     "mac": {
-      "icon": "assets/icon.icns",
+      "icon": "assets/pet1.png",
       "forceCodeSigning": true,
       "notarize": true,
       "entitlements": "assets/entitlements.mac.plist",
