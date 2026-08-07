@@ -373,6 +373,22 @@ const showChatPanel = () => {
   }
 };
 
+const openChatSettings = () => {
+  createChatWindow();
+  if (!chatWindow || chatWindow.isDestroyed()) return;
+
+  showChatPanel();
+  const revealSettings = () => {
+    if (!chatWindow || chatWindow.isDestroyed()) return;
+    chatWindow.webContents.send('open-chat-settings');
+  };
+  if (chatWindow.webContents.isLoadingMainFrame()) {
+    chatWindow.webContents.once('did-finish-load', revealSettings);
+  } else {
+    revealSettings();
+  }
+};
+
 async function openCoco(): Promise<void> {
   if (isSessionActive && currentSessionId) {
     openChatForSession(currentSessionId, pendingTaskLabel || '');
@@ -408,6 +424,12 @@ function createTray(): void {
         label: 'Open History',
         click: () => {
           openHistory();
+        },
+      },
+      {
+        label: 'Settings…',
+        click: () => {
+          openChatSettings();
         },
       },
       { type: 'separator' },
@@ -617,6 +639,56 @@ ipcMain.handle('get-profile', () => {
 // only masked credential status; plaintext keys are accepted on save and never
 // returned over IPC.
 ipcMain.handle('get-model-configuration', () => getModelConfigurationView());
+
+ipcMain.handle('get-service-health', async () => {
+  const checkService = async (url: string) => {
+    try {
+      const response = await axios.get(url, { timeout: 2500 });
+      const data = response.data as {
+        status?: unknown;
+        total_actions?: unknown;
+      };
+      return {
+        connected: true,
+        status: typeof data?.status === 'string' ? data.status : 'healthy',
+        ...(typeof data?.total_actions === 'number'
+          ? { totalActions: data.total_actions }
+          : {}),
+      };
+    } catch (error) {
+      let detail = 'Service is not reachable.';
+      if (axios.isAxiosError(error)) {
+        const responseData = error.response?.data as
+          | { detail?: unknown }
+          | undefined;
+        if (
+          typeof responseData?.detail === 'string' &&
+          responseData.detail.trim()
+        ) {
+          detail = responseData.detail;
+        } else if (error.code === 'ECONNREFUSED') {
+          detail = 'Service is not running.';
+        } else if (error.code === 'ECONNABORTED') {
+          detail = 'Health check timed out.';
+        } else if (error.message) {
+          detail = error.message;
+        }
+      } else if (error instanceof Error) {
+        detail = error.message;
+      }
+      return { connected: false, status: 'unavailable', detail };
+    }
+  };
+
+  const sensingPort = process.env.SENSING_PORT || '8080';
+  const tutorPort = process.env.TUTOR_PORT || '8081';
+  const [sensing, tutor] = await Promise.all([
+    checkService(`http://127.0.0.1:${sensingPort}/health`),
+    checkService(`http://127.0.0.1:${tutorPort}/health`),
+  ]);
+
+  return { checkedAt: Date.now(), sensing, tutor };
+});
 
 ipcMain.handle(
   'test-model-connection',
@@ -1894,6 +1966,33 @@ ipcMain.on('activity-support-rated', (_event, payload) => {
       : Math.floor(Date.now() / 1000),
   );
 });
+
+// The desktop-avatar toggle is independent from the other editable settings,
+// so persist and apply it as soon as the checkbox changes.
+ipcMain.removeHandler('update-avatar-visibility');
+ipcMain.handle(
+  'update-avatar-visibility',
+  (_event, { hideAvatar }: { hideAvatar?: boolean } = {}) => {
+    if (typeof hideAvatar !== 'boolean') {
+      return { success: false, error: 'Invalid avatar visibility setting.' };
+    }
+    try {
+      let profile: Record<string, unknown> = {};
+      try {
+        profile = JSON.parse(fs.readFileSync(profilePath(), 'utf-8'));
+      } catch {
+        /* no existing profile — start fresh */
+      }
+      profile.hideAvatar = hideAvatar;
+      fs.writeFileSync(profilePath(), JSON.stringify(profile, null, 2), 'utf-8');
+      applyAvatarVisibility(hideAvatar);
+      return { success: true };
+    } catch (err) {
+      log.error('[Settings] Failed to update avatar visibility:', err);
+      return { success: false, error: String(err) };
+    }
+  },
+);
 
 // Update the agent mode + AI tools live from the chat's Settings panel.
 // Persists to the profile and applies the change to the running servers so the

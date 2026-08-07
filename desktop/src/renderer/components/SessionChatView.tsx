@@ -155,6 +155,19 @@ interface TutorModelOption {
   baseUrl?: string;
 }
 
+interface ServiceHealth {
+  connected: boolean;
+  status: string;
+  detail?: string;
+  totalActions?: number;
+}
+
+interface ServiceHealthView {
+  checkedAt: number;
+  sensing: ServiceHealth;
+  tutor: ServiceHealth;
+}
+
 const MODEL_PROVIDER_OPTIONS = [
   ['gemini', 'Google Gemini'],
   ['openai', 'OpenAI'],
@@ -164,6 +177,20 @@ const MODEL_PROVIDER_OPTIONS = [
   ['lm_studio', 'LM Studio'],
 ] as const;
 const MODEL_ENDPOINT_PROVIDERS = new Set(['hosted_vllm', 'lm_studio']);
+
+const blankSensingModel = (): TutorModelOption => ({
+  id: 'sensing',
+  label: 'Sensing',
+  provider: 'gemini',
+  model: '',
+});
+
+const blankTutorModel = (): TutorModelOption => ({
+  id: 'tutor-1',
+  label: 'Primary tutor',
+  provider: 'anthropic',
+  model: '',
+});
 
 // crypto.randomUUID needs a secure context; fall back for safety.
 const makeMessageId = (): string =>
@@ -278,6 +305,12 @@ const S: Record<string, React.CSSProperties> = {
   empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
   // Settings panel (mirrors the onboarding toolkit step)
   settings: { borderBottom: `1px solid ${BORDER}`, background: '#ffffff', padding: '14px', maxHeight: 360, overflowY: 'auto' },
+  healthList: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 },
+  healthRow: { display: 'flex', alignItems: 'flex-start', gap: 8, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px' },
+  healthDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0, marginTop: 4 },
+  healthName: { fontSize: 12.5, fontWeight: 700, color: '#374151' },
+  healthDetail: { fontSize: 10.5, color: '#9ca3af', marginTop: 2 },
+  healthActions: { display: 'flex', alignItems: 'center', gap: 9, marginBottom: 14 },
   toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
   toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
   toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
@@ -501,15 +534,24 @@ export default function SessionChatView() {
   const [tutorModels, setTutorModels] = useState<TutorModelOption[]>([]);
   const [currentTutorModelId, setCurrentTutorModelId] = useState('');
   const [switchingModel, setSwitchingModel] = useState(false);
-  const [sensingModel, setSensingModel] = useState<TutorModelOption | null>(null);
+  const [sensingModel, setSensingModel] = useState<TutorModelOption>(
+    blankSensingModel,
+  );
   const [defaultTutorModelId, setDefaultTutorModelId] = useState('');
   const [modelCredentials, setModelCredentials] = useState<Record<string, string>>({});
+  const [modelConfigLoading, setModelConfigLoading] = useState(true);
+  const [modelLoadError, setModelLoadError] = useState('');
   const [modelSaveError, setModelSaveError] = useState('');
   const [modelSavedFlash, setModelSavedFlash] = useState(false);
+  const [serviceHealth, setServiceHealth] = useState<ServiceHealthView | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthError, setHealthError] = useState('');
   // Editable draft of the settings, synced from the loaded profile.
   const [editScenario, setEditScenario] = useState('everyday_support');
   const [editTools, setEditTools] = useState<string[]>([]);
   const [editHideAvatar, setEditHideAvatar] = useState(false);
+  const [avatarSaving, setAvatarSaving] = useState(false);
+  const [avatarSaveError, setAvatarSaveError] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
   // "+ Custom" tool forms (mirrors the onboarding toolkit step).
   const [showAddChatbot, setShowAddChatbot] = useState(false);
@@ -530,6 +572,24 @@ export default function SessionChatView() {
   const pendingContextRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   const problemRef = useRef('');
+
+  const refreshServiceHealth = useCallback(async () => {
+    setHealthLoading(true);
+    setHealthError('');
+    try {
+      const result = await window.electron?.ipcRenderer.invoke(
+        'get-service-health',
+      ) as ServiceHealthView | undefined;
+      if (!result?.sensing || !result?.tutor) {
+        throw new Error('No health response received.');
+      }
+      setServiceHealth(result);
+    } catch (error) {
+      setHealthError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHealthLoading(false);
+    }
+  }, []);
 
   // Keep each active conversation on disk. A short debounce avoids a write for
   // every streaming token while still preserving completed turns promptly.
@@ -802,21 +862,37 @@ export default function SessionChatView() {
     window.electron?.ipcRenderer
       .invoke('get-model-configuration')
       .then((config: any) => {
-        if (!config || !Array.isArray(config.tutors)) return;
+        if (!config?.sensing || !Array.isArray(config.tutors) || config.tutors.length === 0) {
+          const tutor = blankTutorModel();
+          setTutorModels([tutor]);
+          setDefaultTutorModelId(tutor.id);
+          setModelLoadError(
+            'No saved model configuration was found. Configure the sensing and tutor models below.',
+          );
+          return;
+        }
         setTutorModels(config.tutors.map((model: TutorModelOption) => ({
           ...model,
           model: model.model.replace(/^hosted_vllm\//, ''),
         })));
-        setSensingModel(config.sensing
-          ? {
-              ...config.sensing,
-              model: String(config.sensing.model).replace(/^hosted_vllm\//, ''),
-            }
-          : null);
+        setSensingModel({
+          ...config.sensing,
+          model: String(config.sensing.model).replace(/^hosted_vllm\//, ''),
+        });
         setDefaultTutorModelId(config.defaultTutorId || '');
         setCurrentTutorModelId((current) => current || config.defaultTutorId || '');
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        const tutor = blankTutorModel();
+        setTutorModels([tutor]);
+        setDefaultTutorModelId(tutor.id);
+        setModelLoadError(
+          `Could not load saved model settings: ${
+            error instanceof Error ? error.message : String(error)
+          }. You can configure them below.`,
+        );
+      })
+      .finally(() => setModelConfigLoading(false));
     window.electron?.ipcRenderer
       .invoke('get-profile')
       .then((p: any) => {
@@ -856,8 +932,19 @@ export default function SessionChatView() {
   };
 
   const saveModelSettings = async () => {
-    if (!sensingModel || tutorModels.length === 0) return;
+    if (modelConfigLoading) return;
     setModelSaveError('');
+    if (!sensingModel.model.trim()) {
+      setModelSaveError('Enter a vision-capable sensing model.');
+      return;
+    }
+    if (
+      tutorModels.length === 0 ||
+      tutorModels.some((model) => !model.label.trim() || !model.model.trim())
+    ) {
+      setModelSaveError('Add at least one tutor with a display name and model ID.');
+      return;
+    }
     const result = await window.electron?.ipcRenderer.invoke(
       'save-model-configuration',
       {
@@ -874,6 +961,7 @@ export default function SessionChatView() {
       return;
     }
     setModelCredentials({});
+    setModelLoadError('');
     setModelSavedFlash(true);
     setTimeout(() => setModelSavedFlash(false), 1500);
   };
@@ -920,9 +1008,34 @@ export default function SessionChatView() {
     }
   };
 
+  const updateAvatarVisibility = async (hideAvatar: boolean) => {
+    if (avatarSaving) return;
+    const previousValue = editHideAvatar;
+    setEditHideAvatar(hideAvatar);
+    setAvatarSaving(true);
+    setAvatarSaveError('');
+    try {
+      const result = await window.electron?.ipcRenderer.invoke(
+        'update-avatar-visibility',
+        { hideAvatar },
+      );
+      if (!(result as { success?: boolean })?.success) {
+        throw new Error(
+          (result as { error?: string })?.error ||
+          'Could not update desktop avatar visibility.',
+        );
+      }
+      setProfile((current) => ({ ...current, hideAvatar }));
+    } catch (error) {
+      setEditHideAvatar(previousValue);
+      setAvatarSaveError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAvatarSaving(false);
+    }
+  };
+
   const dirty =
     editScenario !== profile.scenario ||
-    editHideAvatar !== profile.hideAvatar ||
     editTools.length !== profile.aiTools.length ||
     editTools.some((t) => !profile.aiTools.includes(t));
 
@@ -938,6 +1051,23 @@ export default function SessionChatView() {
       })
       .catch(() => {});
   }, [showSettings]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    void refreshServiceHealth();
+  }, [showSettings, refreshServiceHealth]);
+
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on(
+      'open-chat-settings',
+      () => {
+        setShowHistory(false);
+        setReviewing(null);
+        setShowSettings(true);
+      },
+    );
+    return () => { if (typeof cleanup === 'function') cleanup(); };
+  }, []);
 
   const saveMemory = async () => {
     const res = await window.electron?.ipcRenderer.invoke('save-memory', { memory: memoryDraft });
@@ -1183,14 +1313,88 @@ export default function SessionChatView() {
 
       {showSettings && (
         <div style={S.settings}>
-          {sensingModel && (
-            <>
-              <div style={S.groupLabel}>Models &amp; providers</div>
-              <div style={S.helpText}>
-                The sensing model receives screenshots. Its credential is kept
-                separate from every tutor credential. Saving changes restarts
-                the local sensing and tutor services.
-              </div>
+          <div style={S.groupLabel}>Health</div>
+          <div style={S.helpText}>
+            Check whether Coco's local sensing server and tutor agent are
+            reachable.
+          </div>
+          <div style={S.healthList}>
+            {([
+              ['sensing', 'Sensing server', serviceHealth?.sensing],
+              ['tutor', 'Tutor agent', serviceHealth?.tutor],
+            ] as const).map(([key, label, health]) => {
+              const statusLabel = health
+                ? (health.connected ? 'Connected' : 'Not connected')
+                : (healthLoading ? 'Checking…' : 'Not checked');
+              const detail = health?.detail || (
+                key === 'sensing' && typeof health?.totalActions === 'number'
+                  ? `${health.totalActions} actions processed`
+                  : ''
+              );
+              return (
+                <div
+                  key={key}
+                  style={S.healthRow}
+                  aria-label={`${label}: ${statusLabel}`}
+                >
+                  <span
+                    style={{
+                      ...S.healthDot,
+                      background: health
+                        ? (health.connected ? '#22c55e' : '#ef4444')
+                        : '#d1d5db',
+                    }}
+                  />
+                  <div style={{ flex: 1 }}>
+                    <div style={S.healthName}>{label}</div>
+                    <div style={{
+                      ...S.healthDetail,
+                      color: health?.connected ? '#16a34a' : undefined,
+                    }}>
+                      {statusLabel}
+                      {detail ? ` · ${detail}` : ''}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={S.healthActions}>
+            <button
+              type="button"
+              style={{ ...S.addBtn, ...(healthLoading ? S.sendBtnDisabled : {}) }}
+              disabled={healthLoading}
+              onClick={() => void refreshServiceHealth()}
+            >
+              {healthLoading ? 'Checking…' : 'Check again'}
+            </button>
+            {serviceHealth && !healthLoading && (
+              <span style={S.healthDetail}>
+                Checked {new Date(serviceHealth.checkedAt).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
+          {healthError && (
+            <div style={{ color: '#b91c1c', fontSize: 11.5, marginBottom: 12 }}>
+              Health check failed: {healthError}
+            </div>
+          )}
+          <div style={S.sectionDivider} />
+
+          <div style={S.groupLabel}>Models &amp; providers</div>
+          <div style={S.helpText}>
+            The sensing model receives screenshots. Its credential is kept
+            separate from every tutor credential. Saving changes restarts
+            the local sensing and tutor services.
+          </div>
+          {modelConfigLoading && (
+            <div style={{ ...S.helpText, marginTop: 8 }}>Loading model settings…</div>
+          )}
+          {modelLoadError && (
+            <div style={{ color: '#b45309', fontSize: 11.5, margin: '8px 0' }}>
+              {modelLoadError}
+            </div>
+          )}
               <div style={S.customForm}>
                 <select
                   style={S.customInput}
@@ -1332,7 +1536,7 @@ export default function SessionChatView() {
               ))}
               <button
                 type="button"
-                style={S.addBtn}
+                style={{ ...S.addBtn, marginBottom: 12 }}
                 onClick={() => {
                   const id = `tutor-${Date.now()}`;
                   setTutorModels((current) => [
@@ -1344,7 +1548,12 @@ export default function SessionChatView() {
                 + Add tutor model
               </button>
               <div style={{ ...S.saveRow, marginBottom: 14 }}>
-                <button type="button" style={S.saveBtn} onClick={saveModelSettings}>
+                <button
+                  type="button"
+                  style={S.saveBtn}
+                  disabled={modelConfigLoading}
+                  onClick={saveModelSettings}
+                >
                   Save model settings
                 </button>
                 {modelSavedFlash && <span style={S.saved}>✓ Saved</span>}
@@ -1355,15 +1564,14 @@ export default function SessionChatView() {
                 </div>
               )}
               <div style={S.sectionDivider} />
-            </>
-          )}
           <div style={S.groupLabel}>Desktop</div>
           <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
             <input
               id="hide-desktop-avatar"
               type="checkbox"
               checked={editHideAvatar}
-              onChange={(e) => setEditHideAvatar(e.target.checked)}
+              disabled={avatarSaving}
+              onChange={(e) => void updateAvatarVisibility(e.target.checked)}
             />
             <span>
               <strong style={S.toggleTitle}>Hide desktop avatar</strong>
@@ -1373,6 +1581,14 @@ export default function SessionChatView() {
               </span>
             </span>
           </label>
+          {avatarSaving && (
+            <div style={{ ...S.helpText, marginTop: -8 }}>Applying…</div>
+          )}
+          {avatarSaveError && (
+            <div style={{ color: '#b91c1c', fontSize: 11.5, margin: '-8px 0 12px' }}>
+              {avatarSaveError}
+            </div>
+          )}
 
           <div style={S.sectionDivider} />
 

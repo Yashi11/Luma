@@ -23,6 +23,7 @@ export type Channels =
   | 'set-user-id'
   | 'toggle-float-window'
   | 'float-window-state'
+  | 'open-chat-settings'
   // Proactive session flow
   | 'session-active'
   | 'show-session-setup'
@@ -45,12 +46,14 @@ export type Channels =
   | 'onboarding-complete'
   | 'get-profile'
   | 'get-model-configuration'
+  | 'get-service-health'
   | 'test-model-connection'
   | 'save-model-configuration'
   | 'set-chat-model'
   // Settings (post-onboarding profile edits)
   | 'save-profile'
   | 'update-settings'
+  | 'update-avatar-visibility'
   // Long-term agent memory (view/edit)
   | 'get-memory'
   | 'save-memory'

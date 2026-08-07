@@ -9,6 +9,140 @@ import {
 import SessionChatView from '../renderer/components/SessionChatView';
 
 describe('deferred suggestion context', () => {
+  it('shows editable model settings when no saved configuration is available', async () => {
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke: jest.fn(async () => null),
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(screen.getByTitle('Settings'));
+
+    expect(screen.getByText('Models & providers')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/No saved model configuration was found/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText('Vision-capable sensing model'),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Tutor model ID')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Save model settings' }),
+    ).toBeEnabled();
+  });
+
+  it('shows sensing and tutor health independently and allows a refresh', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-service-health') {
+        return {
+          checkedAt: 1753200000000,
+          sensing: {
+            connected: true,
+            status: 'healthy',
+            totalActions: 12,
+          },
+          tutor: {
+            connected: false,
+            status: 'unavailable',
+            detail: 'Service is not running.',
+          },
+        };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(screen.getByTitle('Settings'));
+
+    expect(
+      await screen.findByLabelText('Sensing server: Connected'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Tutor agent: Not connected'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/12 actions processed/)).toBeInTheDocument();
+    expect(screen.getByText(/Service is not running/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => {
+      expect(
+        invoke.mock.calls.filter(([channel]) => channel === 'get-service-health'),
+      ).toHaveLength(2);
+    });
+  });
+
+  it('applies desktop avatar visibility immediately', async () => {
+    const invoke = jest.fn(async (channel: string) => {
+      if (channel === 'get-profile') {
+        return {
+          tutorScenario: 'everyday_support',
+          aiTools: [],
+          hideAvatar: false,
+        };
+      }
+      if (channel === 'update-avatar-visibility') {
+        return { success: true };
+      }
+      return null;
+    });
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage: jest.fn(),
+        invoke,
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(screen.getByTitle('Settings'));
+    const checkbox = screen.getByRole('checkbox', {
+      name: /Hide desktop avatar/,
+    });
+    fireEvent.click(checkbox);
+
+    expect(checkbox).toBeChecked();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith('update-avatar-visibility', {
+        hideAvatar: true,
+      });
+      expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    });
+  });
+
+  it('opens the settings panel from the tray event', async () => {
+    const listeners = new Map<string, (data?: unknown) => void>();
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn((channel: string, callback: (data?: unknown) => void) => {
+          listeners.set(channel, callback);
+          return jest.fn();
+        }),
+        sendMessage: jest.fn(),
+        invoke: jest.fn(async () => null),
+      },
+    };
+
+    render(<SessionChatView />);
+    expect(screen.queryByText('Models & providers')).not.toBeInTheDocument();
+
+    await act(async () => {
+      listeners.get('open-chat-settings')?.();
+    });
+
+    expect(screen.getByText('Models & providers')).toBeInTheDocument();
+    expect(screen.getByText('Health')).toBeInTheDocument();
+  });
+
   it('opens and resumes a past conversation from the chat header', async () => {
     const invoke = jest.fn(async (channel: string) => {
       if (channel === 'get-chat-conversations') {
