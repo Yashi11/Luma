@@ -541,6 +541,16 @@ function openPrimaryTrayAction(): void {
   openCoco().catch((err) => log.warn(`[Tray] Could not open Coco: ${err}`));
 }
 
+function handleTrayClick(): void {
+  // Preserve the setup-window recovery path, but once setup is complete let
+  // the user choose an explicit action instead of opening chat immediately.
+  if (setupPending()) {
+    openPrimaryTrayAction();
+    return;
+  }
+  tray?.popUpContextMenu();
+}
+
 function trayIconPath(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'assets', 'icon.png')
@@ -554,7 +564,7 @@ function createTray(): void {
       height: 22,
     });
     tray = new Tray(image);
-    tray.on('click', openPrimaryTrayAction);
+    tray.on('click', handleTrayClick);
   }
   tray.setToolTip('Coco');
   const pendingSetup = setupPending();
