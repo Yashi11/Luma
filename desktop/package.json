@@ -235,7 +235,7 @@
       ]
     },
     "win": {
-      "icon": "assets/icon.png",
+      "icon": "assets/pet1.png",
       "target": [
         "nsis"
       ]
@@ -247,7 +247,7 @@
       "deleteAppDataOnUninstall": false
     },
     "linux": {
-      "icon": "assets/icon.png",
+      "icon": "assets/pet1.png",
       "target": [
         "AppImage"
       ],
