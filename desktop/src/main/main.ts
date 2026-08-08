@@ -33,6 +33,7 @@ import log from 'electron-log';
 import axios from 'axios';
 import { resolveHtmlPath } from './util';
 import { serviceManager } from './services/manager';
+import { configureServiceModelArguments } from './services/model-arguments';
 import {
   startObservationStream,
   stopObservationStream,
@@ -2548,6 +2549,16 @@ const startObserver = () => {
   log.info(`[Models] tutor=${tutorModel} observer=${observerModel}`);
 
   try {
+    // services.json may be loaded earlier while choosing available ports. On a
+    // clean install there is no legacy .env, so its model placeholders have
+    // already expanded to empty strings by this point. Always apply the saved
+    // model IDs directly before startup instead of relying on load-time env
+    // expansion.
+    configureServiceModelArguments(
+      serviceManager,
+      tutorModel,
+      observerModel,
+    );
     const runtime = resolveModelRuntime();
     if (runtime) {
       const { userName } = readProfile();

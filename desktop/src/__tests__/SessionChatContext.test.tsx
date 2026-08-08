@@ -30,12 +30,15 @@ describe('deferred suggestion context', () => {
     ).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Tutor model ID')).toBeInTheDocument();
     expect(
+      screen.getByText(/Configure multiple models, choose a default/),
+    ).toBeInTheDocument();
+    expect(
       screen.getByRole('button', { name: 'Save model settings' }),
     ).toBeEnabled();
   });
 
   it('keeps the tutor selector width fixed and exposes full model details', async () => {
-    const invoke = jest.fn(async (channel: string) => {
+    const invoke = jest.fn(async (channel: string, payload?: any) => {
       if (channel === 'get-model-configuration') {
         return {
           sensing: {
@@ -52,6 +55,14 @@ describe('deferred suggestion context', () => {
             baseUrl: 'https://models.example.test/v1',
           }],
           defaultTutorId: 'primary',
+        };
+      }
+      if (channel === 'test-model-connection') {
+        return {
+          success: true,
+          message: payload.role === 'sensing'
+            ? 'Connected — text and image input accepted.'
+            : 'Connected — text input accepted.',
         };
       }
       return null;
@@ -88,6 +99,42 @@ describe('deferred suggestion context', () => {
       'title',
       expect.stringContaining('Endpoint: https://models.example.test/v1'),
     );
+
+    fireEvent.click(screen.getByTitle('Settings'));
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Test sensing model connection',
+    }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'test-model-connection',
+        expect.objectContaining({
+          role: 'sensing',
+          connection: expect.objectContaining({
+            model: 'gemini/gemini-vision',
+          }),
+        }),
+      );
+      expect(
+        screen.getByText('Connected — text and image input accepted.'),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Test A much longer primary tutor display name connection',
+    }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith(
+        'test-model-connection',
+        expect.objectContaining({
+          role: 'tutor',
+          connection: expect.objectContaining({
+            model: 'org/tutor-model',
+          }),
+        }),
+      );
+      expect(screen.getByText('Connected — text input accepted.'))
+        .toBeInTheDocument();
+    });
   });
 
   it('scales chat content without scaling the header', async () => {

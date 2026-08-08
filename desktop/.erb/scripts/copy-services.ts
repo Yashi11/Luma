@@ -119,7 +119,7 @@ function transformServiceToProduction(service: DevServiceConfig): ProdServiceCon
     }
     base.args = cliArgs;
     base.cwd = sharedServiceDir;
-    base.logPath = '${ELECTRON_UI_ROOT}/logs/' + service.id + '.log';
+    base.logPath = '${USER_DATA_ROOT}/logs/' + service.id + '.log';
     base.shell = service.shell ?? true;
   } else if (isNodeService) {
     // Node service: Use bundled JavaScript file

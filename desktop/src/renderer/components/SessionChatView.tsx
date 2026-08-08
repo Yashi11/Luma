@@ -183,6 +183,11 @@ interface ServiceHealthView {
   tutor: ServiceHealth;
 }
 
+interface ConnectionTestStatus {
+  state: 'testing' | 'success' | 'error';
+  message: string;
+}
+
 const MODEL_PROVIDER_OPTIONS = [
   ['gemini', 'Google Gemini'],
   ['openai', 'OpenAI'],
@@ -336,6 +341,11 @@ const S: Record<string, React.CSSProperties> = {
   healthName: { fontSize: 12.5, fontWeight: 700, color: '#374151' },
   healthDetail: { fontSize: 10.5, color: '#9ca3af', marginTop: 2 },
   healthActions: { display: 'flex', alignItems: 'center', gap: 9, marginBottom: 14 },
+  connectionTestRow: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  connectionTestButton: { border: `1px solid ${ACCENT_BORDER}`, background: '#fff', color: ACCENT, borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
+  connectionTestSuccess: { color: '#16a34a', fontSize: 11.5, fontWeight: 700 },
+  connectionTestError: { width: '100%', color: '#b91c1c', fontSize: 11.5 },
+  connectionTestErrorText: { maxHeight: 140, overflow: 'auto', margin: '6px 0 0', padding: 8, borderRadius: 7, background: '#fef2f2', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', fontSize: 10.5 },
   toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
   toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
   toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
@@ -572,6 +582,9 @@ export default function SessionChatView() {
   const [serviceHealth, setServiceHealth] = useState<ServiceHealthView | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [healthError, setHealthError] = useState('');
+  const [connectionTests, setConnectionTests] = useState<
+    Record<string, ConnectionTestStatus>
+  >({});
   // Editable draft of the settings, synced from the loaded profile.
   const [editScenario, setEditScenario] = useState('everyday_support');
   const [editTools, setEditTools] = useState<string[]>([]);
@@ -987,6 +1000,54 @@ export default function SessionChatView() {
       }
     }
     setSwitchingModel(false);
+  };
+
+  const testSettingsModelConnection = async (
+    role: 'sensing' | 'tutor',
+    model: TutorModelOption,
+  ) => {
+    const key = role === 'sensing' ? 'sensing' : model.id;
+    if (!model.model.trim()) {
+      setConnectionTests((current) => ({
+        ...current,
+        [key]: { state: 'error', message: 'Enter a model ID first.' },
+      }));
+      return;
+    }
+    setConnectionTests((current) => ({
+      ...current,
+      [key]: { state: 'testing', message: '' },
+    }));
+    try {
+      const result = await window.electron?.ipcRenderer.invoke(
+        'test-model-connection',
+        {
+          role,
+          connection: {
+            id: model.id,
+            label: model.label || (role === 'sensing' ? 'Sensing' : 'Tutor'),
+            provider: model.provider,
+            model: model.model,
+            baseUrl: model.baseUrl,
+          },
+          apiKey: modelCredentials[`${role}:${model.provider}`] ?? '',
+        },
+      ) as { success?: boolean; message?: string; error?: string } | undefined;
+      setConnectionTests((current) => ({
+        ...current,
+        [key]: result?.success
+          ? { state: 'success', message: result.message || 'Connected.' }
+          : { state: 'error', message: result?.error || 'Connection failed.' },
+      }));
+    } catch (error) {
+      setConnectionTests((current) => ({
+        ...current,
+        [key]: {
+          state: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }));
+    }
   };
 
   const saveModelSettings = async () => {
@@ -1633,9 +1694,46 @@ export default function SessionChatView() {
                     }))}
                   />
                 )}
+                <div style={S.connectionTestRow}>
+                  <button
+                    type="button"
+                    style={{
+                      ...S.connectionTestButton,
+                      ...(connectionTests.sensing?.state === 'testing'
+                        ? S.sendBtnDisabled
+                        : {}),
+                    }}
+                    aria-label="Test sensing model connection"
+                    disabled={connectionTests.sensing?.state === 'testing'}
+                    onClick={() => void testSettingsModelConnection(
+                      'sensing',
+                      sensingModel,
+                    )}
+                  >
+                    {connectionTests.sensing?.state === 'testing'
+                      ? 'Testing…'
+                      : 'Test connection'}
+                  </button>
+                  {connectionTests.sensing?.state === 'success' && (
+                    <span style={S.connectionTestSuccess}>
+                      {connectionTests.sensing.message}
+                    </span>
+                  )}
+                  {connectionTests.sensing?.state === 'error' && (
+                    <details style={S.connectionTestError}>
+                      <summary>Connection failed — show details</summary>
+                      <pre style={S.connectionTestErrorText}>
+                        {connectionTests.sensing.message}
+                      </pre>
+                    </details>
+                  )}
+                </div>
               </div>
 
-              <div style={S.groupLabel}>Tutor models</div>
+              <div style={S.helpText}>
+                Tutor models answer in chat. Configure multiple models, choose
+                a default, and switch between them anytime.
+              </div>
               {tutorModels.map((model, index) => (
                 <div key={model.id} style={S.customForm}>
                   <input
@@ -1717,6 +1815,37 @@ export default function SessionChatView() {
                       >
                         Remove
                       </button>
+                    )}
+                  </div>
+                  <div style={S.connectionTestRow}>
+                    <button
+                      type="button"
+                      style={{
+                        ...S.connectionTestButton,
+                        ...(connectionTests[model.id]?.state === 'testing'
+                          ? S.sendBtnDisabled
+                          : {}),
+                      }}
+                      aria-label={`Test ${model.label || 'tutor model'} connection`}
+                      disabled={connectionTests[model.id]?.state === 'testing'}
+                      onClick={() => void testSettingsModelConnection('tutor', model)}
+                    >
+                      {connectionTests[model.id]?.state === 'testing'
+                        ? 'Testing…'
+                        : 'Test connection'}
+                    </button>
+                    {connectionTests[model.id]?.state === 'success' && (
+                      <span style={S.connectionTestSuccess}>
+                        {connectionTests[model.id].message}
+                      </span>
+                    )}
+                    {connectionTests[model.id]?.state === 'error' && (
+                      <details style={S.connectionTestError}>
+                        <summary>Connection failed — show details</summary>
+                        <pre style={S.connectionTestErrorText}>
+                          {connectionTests[model.id].message}
+                        </pre>
+                      </details>
                     )}
                   </div>
                 </div>
