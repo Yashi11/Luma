@@ -169,8 +169,7 @@ function StepModels({
       <div className="ob-sub">
         The sensing model reads your screen to detect when help may be useful
         and curate context. Tutor models generate proactive suggestions and
-        chat responses only when needed. API keys are stored locally in a
-        plaintext file protected with owner-only permissions (chmod 600).
+        chat responses only when needed.
       </div>
       <ModelFields
         value={sensing}

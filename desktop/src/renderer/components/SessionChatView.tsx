@@ -1572,10 +1572,7 @@ export default function SessionChatView() {
 
           <div style={S.groupLabel}>Models &amp; providers</div>
           <div style={S.helpText}>
-            The sensing model receives screenshots. Its credential is kept
-            separate from every tutor credential. API keys are stored locally
-            in a plaintext file protected with owner-only permissions (chmod
-            600). Saving changes restarts the local sensing and tutor services.
+            The sensing model receives screenshots. Saving changes restarts the local sensing and tutor services.
           </div>
           {modelConfigLoading && (
             <div style={{ ...S.helpText, marginTop: 8 }}>Loading model settings…</div>
