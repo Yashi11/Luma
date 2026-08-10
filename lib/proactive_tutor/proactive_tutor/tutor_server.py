@@ -124,6 +124,7 @@ class AiToolsRequest(BaseModel):
 
 class StatusResponse(BaseModel):
     status: str
+    service: str = "coco-tutor"
 
 
 class VizRetryRequest(BaseModel):
@@ -432,7 +433,7 @@ def _process_guidance(raw_guidance: str) -> str:
 async def health():
     if tutor is None:
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
-    return StatusResponse(status="healthy")
+    return StatusResponse(status="healthy", service="coco-tutor")
 
 
 @app.post("/suggestion/instant", response_model=InstantSuggestionResponse)
@@ -595,9 +596,11 @@ async def get_context():
 @app.post("/config/model", response_model=StatusResponse)
 async def set_model(req: ModelRequest):
     """Switch the model used by both diagnostic and tutor agents."""
+    global configured_model_name
     if tutor is None:
         raise HTTPException(status_code=503, detail="TutorSystem not initialized")
     tutor.set_model(req.model)
+    configured_model_name = req.model
     logger.info(f"Model updated: {req.model}")
     return StatusResponse(status="ok")
 
