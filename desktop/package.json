@@ -209,13 +209,7 @@
       "notarize": true,
       "entitlements": "assets/entitlements.mac.plist",
       "entitlementsInherit": "assets/entitlements.mac.plist",
-      "target": {
-        "target": "default",
-        "arch": [
-          "x64",
-          "arm64"
-        ]
-      },
+      "target": "default",
       "type": "distribution",
       "hardenedRuntime": true,
       "gatekeeperAssess": false
