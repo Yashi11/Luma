@@ -1,0 +1,7 @@
+Visual Copilot
+
+The desktop architecture is informed by CoCo, Copyright Yijia Shao and
+collaborative-agents contributors, licensed under the Apache License 2.0:
+https://github.com/collaborative-agents/coco
+
+No CoCo continuous-observer behavior is enabled by this project.

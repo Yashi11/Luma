@@ -1,0 +1,2 @@
+export {};
+declare global { interface Window { visualCopilot: { completeSelection(value: {displayId:string;rectangle:{x:number;y:number;width:number;height:number}}):void; cancel():void; submitQuestion(id:string,question:string):Promise<{explanation:string;uncertainty:string|null;needsMoreContext:boolean}>; cancelPreview(id:string):void; retrySelection():void; onPreview(listener:(payload:{captureId:string;imageDataUrl:string})=>void):void; onError(listener:(message:string)=>void):void } } }
