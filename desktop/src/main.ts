@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, session } from 'electron';
+import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, session, type Display, type NativeImage } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { Explanation, Rectangle, SelectionResult } from './shared';
@@ -6,12 +6,14 @@ import type { Explanation, Rectangle, SelectionResult } from './shared';
 const HOTKEY = process.env.VISUAL_COPILOT_HOTKEY || 'CommandOrControl+Shift+E';
 const MIN_SELECTION_DIP = 24;
 const MAX_ENCODED_BYTES = 10 * 1024 * 1024;
+const MAX_NATIVE_PIXELS = 16_000_000;
 const CAPTURE_TTL_MS = 5 * 60 * 1000;
 type PendingCapture = { png: Buffer; expiresAt: number; sha256: string };
+type DisplaySnapshot = { id: string; bounds: Electron.Rectangle; scaleFactor: number; rotation: number };
 
 let overlayWindow: BrowserWindow | null = null;
 let previewWindow: BrowserWindow | null = null;
-let activeDisplayId: string | null = null;
+let activeDisplay: DisplaySnapshot | null = null;
 const captures = new Map<string, PendingCapture>();
 
 function rendererFile(name: string): string { return path.join(__dirname, 'renderer', name); }
@@ -34,7 +36,7 @@ function secureWindow(options: Electron.BrowserWindowConstructorOptions): Browse
 
 function activateSelection(): void {
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  activeDisplayId = String(display.id);
+  activeDisplay = snapshotDisplay(display);
   overlayWindow?.destroy();
   overlayWindow = secureWindow({
     x: display.bounds.x, y: display.bounds.y,
@@ -49,6 +51,31 @@ function activateSelection(): void {
   overlayWindow.on('closed', () => { overlayWindow = null; });
 }
 
+function snapshotDisplay(display: Display): DisplaySnapshot {
+  return { id: String(display.id), bounds: { ...display.bounds }, scaleFactor: display.scaleFactor, rotation: display.rotation };
+}
+
+function displayMatchesSnapshot(display: Display, snapshot: DisplaySnapshot): boolean {
+  const current = snapshotDisplay(display);
+  return current.id === snapshot.id && current.scaleFactor === snapshot.scaleFactor && current.rotation === snapshot.rotation
+    && current.bounds.x === snapshot.bounds.x && current.bounds.y === snapshot.bounds.y
+    && current.bounds.width === snapshot.bounds.width && current.bounds.height === snapshot.bounds.height;
+}
+
+function isLikelyBlack(image: NativeImage): boolean {
+  const bitmap = image.getBitmap();
+  if (bitmap.length < 4) return true;
+  const pixelCount = Math.floor(bitmap.length / 4);
+  const stride = Math.max(1, Math.floor(pixelCount / 4096));
+  let sampled = 0, dark = 0;
+  for (let pixel = 0; pixel < pixelCount; pixel += stride) {
+    const offset = pixel * 4;
+    if ((bitmap[offset] ?? 0) < 4 && (bitmap[offset + 1] ?? 0) < 4 && (bitmap[offset + 2] ?? 0) < 4) dark += 1;
+    sampled += 1;
+  }
+  return sampled > 0 && dark / sampled > 0.995;
+}
+
 function validateRectangle(rect: Rectangle, width: number, height: number): void {
   const values = [rect.x, rect.y, rect.width, rect.height];
   if (!values.every(Number.isFinite)) throw new Error('Selection contains invalid coordinates.');
@@ -58,7 +85,7 @@ function validateRectangle(rect: Rectangle, width: number, height: number): void
 
 async function captureSelection(selection: SelectionResult): Promise<void> {
   const display = screen.getAllDisplays().find((item) => String(item.id) === selection.displayId);
-  if (!display || selection.displayId !== activeDisplayId) throw new Error('Display configuration changed. Select the area again.');
+  if (!display || !activeDisplay || !displayMatchesSnapshot(display, activeDisplay)) throw new Error('Display configuration changed. Select the area again.');
   validateRectangle(selection.rectangle, display.bounds.width, display.bounds.height);
   overlayWindow?.hide();
   await new Promise((resolve) => setTimeout(resolve, 120));
@@ -76,6 +103,8 @@ async function captureSelection(selection: SelectionResult): Promise<void> {
   const image = source.thumbnail.crop(crop);
   const png = image.toPNG();
   if (image.isEmpty() || png.length === 0) throw new Error('The selected crop is empty or protected.');
+  if (crop.width * crop.height > MAX_NATIVE_PIXELS) throw new Error('The selected crop exceeds 16 megapixels. Select a smaller area.');
+  if (isLikelyBlack(image)) throw new Error('macOS returned a black or protected capture. Nothing was sent.');
   if (png.length > MAX_ENCODED_BYTES) throw new Error('The selected crop exceeds 10 MB. Select a smaller area.');
   const captureId = randomUUID();
   captures.set(captureId, { png, expiresAt: Date.now() + CAPTURE_TTL_MS, sha256: createHash('sha256').update(png).digest('hex') });
@@ -107,6 +136,7 @@ async function explainWithProvider(png: Buffer, question: string): Promise<Expla
   const userQuestion = question.trim() || 'Explain this.';
   const response = await fetch(endpoint, {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({
       model,
       response_format: { type: 'json_object' },
@@ -131,7 +161,7 @@ async function explainWithProvider(png: Buffer, question: string): Promise<Expla
 function registerIpc(): void {
   ipcMain.on('selection:complete', (event, selection: SelectionResult) => {
     if (event.sender !== overlayWindow?.webContents) return;
-    const normalized = { ...selection, displayId: activeDisplayId ?? '' };
+    const normalized = { ...selection, displayId: activeDisplay?.id ?? '' };
     void captureSelection(normalized).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : 'Capture failed.';
       overlayWindow?.webContents.send('selection:error', message); overlayWindow?.show();
@@ -150,7 +180,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(() => {
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => callback(permission === 'media'));
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   registerIpc();
   if (!globalShortcut.register(HOTKEY, activateSelection)) throw new Error(`Could not register hotkey ${HOTKEY}`);
   setInterval(() => { const now = Date.now(); for (const [id, capture] of captures) if (capture.expiresAt <= now) captures.delete(id); }, 30_000).unref();
