@@ -25,6 +25,7 @@
     "asar": true,
     "files": ["dist/**/*", "package.json"],
     "mac": {
+      "icon": "assets/icon.png",
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
       "entitlements": "assets/entitlements.mac.plist",
