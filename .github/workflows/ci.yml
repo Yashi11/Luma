@@ -36,3 +36,14 @@ jobs:
         run: npm test
       - name: Audit production dependencies
         run: npm audit --omit=dev
+      - name: Cache Electron runtime
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/electron
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/package-lock.json') }}
+      - name: Assemble unsigned macOS app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run package:dir
+      - name: Validate application bundle
+        run: plutil -lint "dist/mac-arm64/Visual Copilot.app/Contents/Info.plist"

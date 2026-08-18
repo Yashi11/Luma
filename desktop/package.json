@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "description": "Privacy-first visual explanation copilot for macOS",
+  "author": "Yashi11",
+  "license": "UNLICENSED",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc && node scripts/copy-static.mjs",
     "start": "npm run build && electron .",
     "test": "npm run build -- --pretty false",
+    "package:dir": "npm run build && electron-builder --mac dir --publish never",
     "package:mac": "npm run build && electron-builder --mac --publish never"
   },
   "devDependencies": {
