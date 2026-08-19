@@ -360,10 +360,22 @@ class TutorAgent:
         operation: str = "tutor",
         allow_tools: bool = True,
     ) -> tuple[LiteLLMMessage, LLMCallMetrics]:
+        prepared_messages = self._prepare_chat_messages(messages, image_paths)
+        has_audio = any(
+            isinstance(message.get("content"), list)
+            and any(
+                isinstance(block, dict) and block.get("type") == "input_audio"
+                for block in message["content"]
+            )
+            for message in prepared_messages
+        )
         response, metrics = chat_completion(
-            self._prepare_chat_messages(messages, image_paths),
+            prepared_messages,
             model=self.model,
             max_tokens=8192,
+            reasoning_effort=(
+                "none" if has_audio and self.model.startswith("tinker/") else None
+            ),
             operation=operation,
             on_chunk=on_chunk,
             tools=self._tool_definitions()

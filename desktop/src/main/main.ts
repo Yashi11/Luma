@@ -27,6 +27,7 @@ import {
   dialog,
   screen,
   powerMonitor,
+  systemPreferences,
 } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
@@ -43,6 +44,10 @@ import {
   TutorStreamTimeoutError,
 } from './services/tutor-stream';
 import type { TutorStreamEvent } from './services/tutor-stream';
+import {
+  WakeWordService,
+  type WakeWordStatusEvent,
+} from './services/wake-word-service';
 import {
   appendActivity,
   readActivity,
@@ -135,6 +140,7 @@ class AppUpdater {
 // sessionSetupWindow: small floating window for proactive session config
 let avatarWindow: BrowserWindow | null = null;
 let chatWindow: BrowserWindow | null = null;
+let wakeWordCaptureWindow: BrowserWindow | null = null;
 let notificationWindow: BrowserWindow | null = null;
 let notificationHovered = false;
 let latestHiddenSuggestionObservationId: string | undefined;
@@ -145,6 +151,73 @@ let hideAvatarMode = false;
 let avatarRendererReady = false;
 let pendingOpenHistory = false;
 const observationSleepGuard = new ObservationSleepGuard();
+let wakeWordService: WakeWordService | null = null;
+let wakeWordEnabled = false;
+let wakeWordStatus: WakeWordStatusEvent = { status: 'disabled' };
+let systemSuspended = false;
+let wakeWordCapturePaused = false;
+let wakeWordCapturePauseTimer: ReturnType<typeof setTimeout> | null = null;
+let wakeWordCaptureState = 'stopped';
+let wakeWordDetectionSequence = 0;
+let pendingWakeWordDetection: {
+  id: number;
+  keyword: string;
+  attempts: number;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+} | null = null;
+
+const WAKE_WORDS = ['COCO', 'HI COCO', 'HEY COCO'] as const;
+const WAKE_WORD_MODEL =
+  'sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01';
+
+const wakeWordSettingsPath = () =>
+  path.join(app.getPath('userData'), 'wake-word.json');
+
+const readWakeWordEnabled = (): boolean => {
+  const settingsPath = wakeWordSettingsPath();
+  try {
+    const enabled = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+      ?.enabled === true;
+    log.info(`[Wake word] Loaded enabled=${enabled} from ${settingsPath}`);
+    return enabled;
+  } catch (error) {
+    log.info(
+      `[Wake word] No saved setting at ${settingsPath}; defaulting disabled (${(error as Error).message})`,
+    );
+    return false;
+  }
+};
+
+const saveWakeWordEnabled = (enabled: boolean): void => {
+  fs.writeFileSync(
+    wakeWordSettingsPath(),
+    `${JSON.stringify({ enabled }, null, 2)}\n`,
+    'utf8',
+  );
+};
+
+const publishWakeWordStatus = (status: WakeWordStatusEvent): void => {
+  wakeWordStatus = status;
+  chatWindow?.webContents.send('wake-word-status', status);
+  if (status.detail) log.warn(`[Wake word] ${status.status}: ${status.detail}`);
+  else log.info(`[Wake word] ${status.status}`);
+};
+
+const setWakeWordCapturePaused = (paused: boolean): void => {
+  wakeWordCapturePaused = paused;
+  if (wakeWordCapturePauseTimer) clearTimeout(wakeWordCapturePauseTimer);
+  wakeWordCapturePauseTimer = null;
+  wakeWordCaptureWindow?.webContents.send('wake-word-capture-paused-changed', {
+    paused,
+  });
+  if (paused) {
+    // Voice recording is capped at 30 seconds. Never leave activation paused
+    // indefinitely if the chat renderer fails during the handoff.
+    wakeWordCapturePauseTimer = setTimeout(() => {
+      setWakeWordCapturePaused(false);
+    }, 45_000);
+  }
+};
 
 // Hot-key screen captures (Cmd/Ctrl+Shift+Space) waiting to be shown as preview
 // thumbnails in the chat input bar. When the hot key opens a fresh chat window,
@@ -401,7 +474,7 @@ const createChatWindow = () => {
     resizable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
-    webPreferences: { preload: preloadPath() },
+    webPreferences: { preload: preloadPath(), backgroundThrottling: false },
   });
 
   chatWindow.loadURL(`${resolveHtmlPath('index.html')}?view=session`);
@@ -449,9 +522,8 @@ const createChatWindow = () => {
     reportChatContentZoom();
   });
 
-  // Closing hides rather than destroys so the in-memory conversation survives a
-  // reopen; the avatar always comes back to the foreground. On a real app quit
-  // (isQuitting) we let the window close so shutdown isn't blocked.
+  // Closing hides rather than destroys so the in-memory conversation survives
+  // a reopen. On a real app quit, let it close so shutdown isn't blocked.
   chatWindow.on('close', (event) => {
     if (isQuitting) return;
     event.preventDefault();
@@ -497,6 +569,125 @@ const showChatPanel = () => {
   ) {
     avatarWindow.show();
   }
+};
+
+const deliverPendingWakeWordDetection = (): void => {
+  const pending = pendingWakeWordDetection;
+  if (!pending) return;
+  if (pending.attempts >= 30) {
+    log.warn(
+      `[Wake word] Chat did not acknowledge detection ${pending.id}; resuming listening`,
+    );
+    pendingWakeWordDetection = null;
+    setWakeWordCapturePaused(false);
+    return;
+  }
+  pending.attempts += 1;
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.webContents.send('wake-word-detected', {
+      id: pending.id,
+      keyword: pending.keyword,
+    });
+  }
+  pending.retryTimer = setTimeout(deliverPendingWakeWordDetection, 500);
+};
+
+const queueWakeWordDetection = (keyword: string): void => {
+  if (pendingWakeWordDetection?.retryTimer) {
+    clearTimeout(pendingWakeWordDetection.retryTimer);
+  }
+  wakeWordDetectionSequence += 1;
+  pendingWakeWordDetection = {
+    id: wakeWordDetectionSequence,
+    keyword,
+    attempts: 0,
+    retryTimer: null,
+  };
+  setWakeWordCapturePaused(true);
+  showChatPanel();
+  deliverPendingWakeWordDetection();
+};
+
+const createWakeWordCaptureWindow = (): void => {
+  if (wakeWordCaptureWindow && !wakeWordCaptureWindow.isDestroyed()) return;
+  const { x, y } = screen.getPrimaryDisplay().workArea;
+  wakeWordCaptureWindow = new BrowserWindow({
+    show: false,
+    x,
+    y,
+    width: 1,
+    height: 1,
+    opacity: 0,
+    transparent: true,
+    frame: false,
+    focusable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: preloadPath(),
+      backgroundThrottling: false,
+    },
+  });
+  wakeWordCaptureWindow.setIgnoreMouseEvents(true);
+  wakeWordCaptureWindow.setAlwaysOnTop(true, 'floating');
+  wakeWordCaptureWindow.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true,
+  });
+  wakeWordCaptureWindow.loadURL(
+    `${resolveHtmlPath('index.html')}?view=wake-word-capture`,
+  );
+  wakeWordCaptureWindow.webContents.on(
+    'render-process-gone',
+    (_event, details) => {
+      log.error(
+        `[Wake word] Capture renderer exited: ${details.reason} (${details.exitCode})`,
+      );
+    },
+  );
+  wakeWordCaptureWindow.on('closed', () => {
+    wakeWordCaptureWindow = null;
+  });
+};
+
+const syncWakeWordService = (): void => {
+  if (!wakeWordService) return;
+  if (!wakeWordEnabled) wakeWordService.stop('disabled');
+  else if (systemSuspended) wakeWordService.stop('sleeping');
+  else wakeWordService.start();
+};
+
+const initializeWakeWordService = (): void => {
+  if (wakeWordService) return;
+  wakeWordEnabled = readWakeWordEnabled();
+  const modelDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'assets', 'wake-word', WAKE_WORD_MODEL)
+    : path.resolve(process.cwd(), 'assets', 'wake-word', WAKE_WORD_MODEL);
+  const executable = app.isPackaged
+    ? path.join(
+        process.resourcesPath,
+        'service-dist',
+        'coco-services',
+        process.platform === 'win32'
+          ? 'wake-word-worker.exe'
+          : 'wake-word-worker',
+      )
+    : undefined;
+  wakeWordService = new WakeWordService({
+    projectRoot: app.isPackaged
+      ? process.resourcesPath
+      : path.resolve(process.cwd(), '..'),
+    modelDir,
+    stateDir: path.join(app.getPath('userData'), 'wake-word'),
+    logPath: path.join(app.getPath('userData'), 'logs', 'wake-word.log'),
+    packagedExecutable: executable,
+    onStatus: publishWakeWordStatus,
+    onDetected: (keyword) => {
+      if (!wakeWordEnabled || systemSuspended) return;
+      log.info(`[Wake word] Detected ${keyword}`);
+      queueWakeWordDetection(keyword);
+    },
+  });
+  syncWakeWordService();
 };
 
 const openChatSettings = () => {
@@ -1396,6 +1587,143 @@ ipcMain.on('training-feedback', async (_event, payload) => {
   }
 });
 
+ipcMain.removeHandler('get-wake-word-settings');
+ipcMain.handle('get-wake-word-settings', () => ({
+  enabled: wakeWordEnabled,
+  keywords: [...WAKE_WORDS],
+  capturePaused: wakeWordCapturePaused,
+  ...wakeWordStatus,
+  logPath: path.join(app.getPath('userData'), 'logs', 'wake-word.log'),
+}));
+
+ipcMain.removeHandler('set-wake-word-settings');
+ipcMain.handle(
+  'set-wake-word-settings',
+  async (_event, { enabled }: { enabled?: boolean } = {}) => {
+    if (typeof enabled !== 'boolean') {
+      return { success: false, error: 'Invalid voice activation setting.' };
+    }
+    if (
+      enabled &&
+      process.platform === 'darwin' &&
+      systemPreferences.getMediaAccessStatus('microphone') !== 'granted'
+    ) {
+      const granted = await systemPreferences.askForMediaAccess('microphone');
+      if (!granted) {
+        return {
+          success: false,
+          error:
+            'Microphone access is required. Enable Coco under Privacy & Security → Microphone.',
+        };
+      }
+    }
+    wakeWordEnabled = enabled;
+    if (!enabled) setWakeWordCapturePaused(false);
+    saveWakeWordEnabled(enabled);
+    syncWakeWordService();
+    const settings = {
+      enabled,
+      keywords: [...WAKE_WORDS],
+      capturePaused: wakeWordCapturePaused,
+      ...wakeWordStatus,
+    };
+    chatWindow?.webContents.send('wake-word-settings-changed', settings);
+    wakeWordCaptureWindow?.webContents.send(
+      'wake-word-settings-changed',
+      settings,
+    );
+    return { success: true, ...settings };
+  },
+);
+
+ipcMain.removeHandler('set-wake-word-capture-paused');
+ipcMain.handle(
+  'set-wake-word-capture-paused',
+  (_event, { paused }: { paused?: boolean } = {}) => {
+    if (typeof paused !== 'boolean') return { success: false };
+    setWakeWordCapturePaused(paused);
+    return { success: true, paused };
+  },
+);
+
+ipcMain.removeAllListeners('wake-word-capture-renderer-ready');
+ipcMain.on('wake-word-capture-renderer-ready', (event) => {
+  if (
+    !wakeWordCaptureWindow ||
+    event.sender !== wakeWordCaptureWindow.webContents
+  ) {
+    return;
+  }
+  // getUserMedia can remain pending forever in a genuinely hidden renderer on
+  // macOS. Keep this 1 px, fully transparent window technically visible.
+  wakeWordCaptureWindow.showInactive();
+  wakeWordCaptureWindow.webContents.send('wake-word-settings-changed', {
+    enabled: wakeWordEnabled,
+    keywords: [...WAKE_WORDS],
+    capturePaused: wakeWordCapturePaused,
+    ...wakeWordStatus,
+  });
+  setImmediate(() => {
+    wakeWordCaptureWindow?.webContents.send('wake-word-capture-window-ready');
+  });
+  log.info('[Wake word] Microphone capture renderer ready');
+});
+
+ipcMain.removeAllListeners('wake-word-detection-ack');
+ipcMain.on(
+  'wake-word-detection-ack',
+  (event, value: { id?: unknown } | undefined) => {
+    if (!chatWindow || event.sender !== chatWindow.webContents) return;
+    const id = typeof value?.id === 'number' ? value.id : null;
+    if (!pendingWakeWordDetection || pendingWakeWordDetection.id !== id) return;
+    if (pendingWakeWordDetection.retryTimer) {
+      clearTimeout(pendingWakeWordDetection.retryTimer);
+    }
+    log.info(
+      `[Wake word] Chat acknowledged detection ${id} after ${pendingWakeWordDetection.attempts} attempt(s)`,
+    );
+    pendingWakeWordDetection = null;
+  },
+);
+
+ipcMain.removeAllListeners('wake-word-capture-status');
+ipcMain.on('wake-word-capture-status', (event, value: unknown) => {
+  if (
+    !wakeWordCaptureWindow ||
+    event.sender !== wakeWordCaptureWindow.webContents
+  ) {
+    return;
+  }
+  const status = value as { state?: unknown; detail?: unknown } | undefined;
+  const state = typeof status?.state === 'string' ? status.state : 'unknown';
+  if (state === wakeWordCaptureState && !status?.detail) return;
+  wakeWordCaptureState = state;
+  const detail = typeof status?.detail === 'string' ? `: ${status.detail}` : '';
+  log.info(`[Wake word] Microphone capture ${state}${detail}`);
+  chatWindow?.webContents.send('wake-word-capture-status', {
+    state,
+    detail: typeof status?.detail === 'string' ? status.detail : undefined,
+  });
+});
+
+ipcMain.removeAllListeners('wake-word-audio-frame');
+ipcMain.on('wake-word-audio-frame', (event, frame: unknown) => {
+  if (
+    !wakeWordEnabled ||
+    systemSuspended ||
+    wakeWordCapturePaused ||
+    !wakeWordCaptureWindow ||
+    event.sender !== wakeWordCaptureWindow.webContents
+  ) {
+    return;
+  }
+  if (frame instanceof Uint8Array) {
+    wakeWordService?.writeAudio(Buffer.from(frame));
+  } else if (frame instanceof ArrayBuffer) {
+    wakeWordService?.writeAudio(Buffer.from(new Uint8Array(frame)));
+  }
+});
+
 ipcMain.removeAllListeners('notification');
 ipcMain.on('notification', (_event, args) => {
   const { msg, buttonText } = args;
@@ -2120,6 +2448,63 @@ ipcMain.handle(
   },
 );
 
+ipcMain.removeHandler('send-audio-message');
+ipcMain.handle(
+  'send-audio-message',
+  async (
+    ipcEvent,
+    {
+      requestId,
+      audioData,
+    }: {
+      requestId: string;
+      audioData: string;
+    },
+  ) => {
+    if (!audioData || audioData.length > 16_000_000) {
+      return { error: 'The voice recording is empty or too large.' };
+    }
+    const tutorPort = process.env.TUTOR_PORT || '8081';
+    try {
+      await consumeTutorStream(
+        `http://127.0.0.1:${tutorPort}/events/audio_prompt/stream`,
+        {
+          audio_data: audioData,
+          audio_format: 'wav',
+          session_id: currentSessionId,
+        },
+        (streamEvent: TutorStreamEvent) => {
+          ipcEvent.sender.send('chat-stream-event', {
+            requestId,
+            ...streamEvent,
+          });
+        },
+        undefined,
+        {
+          idleMs: 60_000,
+          hardMs: 5 * 60_000,
+        },
+      );
+      return { streamed: true };
+    } catch (err) {
+      log.error(
+        '[Chat] streaming audio prompt failed:',
+        err instanceof Error ? err.message : String(err),
+      );
+      const error =
+        err instanceof TutorStreamTimeoutError
+          ? 'The tutor took too long to respond to the voice message. Please retry.'
+          : 'The tutor could not process the voice message. Please try again.';
+      ipcEvent.sender.send('chat-stream-event', {
+        requestId,
+        type: 'error',
+        error,
+      });
+      return { error };
+    }
+  },
+);
+
 if (process.env.NODE_ENV === 'production') {
   const sourceMapSupport = require('source-map-support');
   sourceMapSupport.install();
@@ -2736,8 +3121,11 @@ app
   .whenReady()
   .then(async () => {
     await configureLocalServicePorts();
+    initializeWakeWordService();
     powerMonitor.on('suspend', () => {
       log.info('[Power] System suspended; clearing proactive UI and cache.');
+      systemSuspended = true;
+      syncWakeWordService();
       observationSleepGuard.suspend();
       latestHiddenSuggestionObservationId = undefined;
       suggestionCache.clear();
@@ -2746,10 +3134,13 @@ app
       if (avatarWindow && !avatarWindow.isDestroyed()) {
         avatarWindow.webContents.send('system-suspend');
       }
+      chatWindow?.webContents.send('system-suspend');
     });
 
     powerMonitor.on('resume', () => {
       log.info('[Power] System resumed; suppressing observations briefly.');
+      systemSuspended = false;
+      syncWakeWordService();
       observationSleepGuard.resume();
       latestHiddenSuggestionObservationId = undefined;
       suggestionCache.clear();
@@ -2778,6 +3169,9 @@ app
     }
 
     createWindow();
+    createWakeWordCaptureWindow();
+    // Keep chat state alive while its panel is closed.
+    createChatWindow();
 
     // Register global shortcut to toggle DevTools (Cmd/Ctrl+Shift+I)
     globalShortcut.register('CommandOrControl+Shift+I', () => {
@@ -2843,6 +3237,7 @@ app.on('before-quit', (event) => {
   isQuitting = true;
   log.info('App quitting: waiting up to 10s for services to stop...');
   stopObservationStream();
+  wakeWordService?.stop('disabled');
   const shutdownTimeoutMs = 10_000;
   serviceManager
     .shutdown(shutdownTimeoutMs)
