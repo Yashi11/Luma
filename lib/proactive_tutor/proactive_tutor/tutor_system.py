@@ -603,8 +603,10 @@ class TutorSystem:
         self,
         audio_data: str,
         on_event: Callable[[dict], None] | None = None,
+        session_id: str | None = None,
     ) -> tuple[str, LLMCallMetrics]:
         """Process a WAV voice message with the current tutor agent."""
+        event_ts = time.time()
         logger.info("[AUDIO_PROMPT] Handling voice message")
         validate_wav_base64(audio_data)
         audio_message = {
@@ -641,6 +643,8 @@ class TutorSystem:
             guidance,
             None,
             llm_metrics=metrics,
+            session_id=session_id,
+            event_ts=event_ts,
         )
         logger.info(f"[TUTOR] {guidance}")
         return guidance, metrics
