@@ -23,12 +23,15 @@ class LocalSelectionService:
         provider: VisionProvider,
         display_supplier: Callable[[str], DisplaySnapshot],
         provider_metadata: Mapping[str, str] | None = None,
+        capability_token: str | None = None,
     ):
         self._capturer = capturer
         self._provider = provider
         self._display_supplier = display_supplier
         self._provider_metadata = dict(provider_metadata or {})
-        self._capability_token = secrets.token_urlsafe(32)
+        self._capability_token = capability_token or secrets.token_urlsafe(32)
+        if len(self._capability_token) < 32:
+            raise ValueError("capability token must contain at least 32 characters")
         self._sessions: dict[str, SelectionSession] = {}
         self._lock = RLock()
 
@@ -63,9 +66,18 @@ class LocalSelectionService:
     def overlay_hidden(self, token: str, session_id: str) -> None:
         self._session(token, session_id).confirm_overlay_hidden()
 
-    def capture(self, token: str, session_id: str) -> bytes:
+    def capture(
+        self,
+        token: str,
+        session_id: str,
+        current_display_payload: Mapping[str, object] | None = None,
+    ) -> bytes:
         session = self._session(token, session_id)
-        current = self._display_supplier(session.display.display_id)
+        current = (
+            parse_display_snapshot(current_display_payload)
+            if current_display_payload is not None
+            else self._display_supplier(session.display.display_id)
+        )
         return session.capture_region(self._capturer, current).png
 
     def preview(

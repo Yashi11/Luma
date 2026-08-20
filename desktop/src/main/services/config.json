@@ -1,0 +1,68 @@
+{
+  "app": {
+    "name": "Coco"
+  },
+  "services": [
+    {
+      "id": "tutor-server",
+      "name": "Tutor Server",
+      "enabled": false,
+      "type": "python",
+      "command": "uv",
+      "args": [
+        "run", "python", "-m", "proactive_tutor.tutor_server",
+        "--port=8081",
+        "--model_name=${TUTOR_MODEL}"
+      ],
+      "cwd": "${PROJECT_ROOT}",
+      "shell": true,
+      "restartOnCrash": true,
+      "logPath": "${ELECTRON_UI_ROOT}/logs/tutor-server.log",
+      "env": {
+        "ANTHROPIC_API_KEY": ""
+      }
+    },
+    {
+      "id": "sensing-server",
+      "name": "Sensing Server",
+      "enabled": false,
+      "type": "python",
+      "command": "uv",
+      "args": [
+        "run", "python", "-m", "lib.sensing.sensing.sensing_server",
+        "--port=8080",
+        "--ai_tutoring=True",
+        "--tutor_url=http://localhost:8081",
+        "--observer_model=${OBSERVER_MODEL}",
+        "--observer_interval_seconds=60"
+      ],
+      "cwd": "${PROJECT_ROOT}",
+      "shell": true,
+      "restartOnCrash": true,
+      "logPath": "${ELECTRON_UI_ROOT}/logs/sensing-server.log",
+      "env": {
+        "GEMINI_API_KEY": ""
+      }
+    },
+    {
+      "id": "visual-copilot-server",
+      "name": "Visual Copilot Selection Service",
+      "enabled": true,
+      "type": "python",
+      "command": "uv",
+      "args": [
+        "run", "python", "-m", "visual_copilot.server",
+        "--port=8082"
+      ],
+      "cwd": "${PROJECT_ROOT}",
+      "shell": true,
+      "restartOnCrash": true,
+      "logPath": "${ELECTRON_UI_ROOT}/logs/visual-copilot-server.log",
+      "env": {
+        "OPENAI_API_KEY": "",
+        "OPENAI_MODEL": "${OPENAI_MODEL}",
+        "VISUAL_COPILOT_CAPABILITY_TOKEN": "${VISUAL_COPILOT_CAPABILITY_TOKEN}"
+      }
+    }
+  ]
+}

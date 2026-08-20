@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from enum import Enum
+from enum import StrEnum
 from threading import RLock
 
 from .capture import CapturedCrop, RegionCapture
@@ -13,7 +13,7 @@ from .privacy import StrictOutboundRequest, build_strict_request
 from .provider import Explanation, VisionProvider
 
 
-class SessionState(str, Enum):
+class SessionState(StrEnum):
     ACTIVE = "active"
     GEOMETRY_FROZEN = "geometry_frozen"
     OVERLAY_HIDDEN = "overlay_hidden"

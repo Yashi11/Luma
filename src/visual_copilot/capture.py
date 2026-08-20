@@ -232,7 +232,7 @@ class MssRegionCapture:
             from PIL import Image  # type: ignore
         except ImportError as exc:
             raise RuntimeError("capture support requires the 'capture' extra") from exc
-        self._mss = mss.mss()
+        self._mss_factory = mss.mss
         self._image = Image
 
     def capture(
@@ -243,18 +243,21 @@ class MssRegionCapture:
         context.validate()
         if current_display is not None:
             context.assert_display_unchanged(current_display)
-        raw = self._mss.grab(
-            {
-                "left": context.display.capture_left + context.crop.x,
-                "top": context.display.capture_top + context.crop.y,
-                "width": context.crop.width,
-                "height": context.crop.height,
-            }
-        )
+        # MSS stores native handles in thread-local state. FastAPI may execute
+        # capture on a worker thread, so create and close it in that same call.
+        with self._mss_factory() as capture:
+            raw = capture.grab(
+                {
+                    "left": context.display.capture_left + context.crop.x,
+                    "top": context.display.capture_top + context.crop.y,
+                    "width": context.crop.width,
+                    "height": context.crop.height,
+                }
+            )
         image = self._image.frombytes("RGB", raw.size, raw.rgb)
         output = io.BytesIO()
         image.save(output, format="PNG", optimize=True)
         return _validate_and_bind(output.getvalue(), context)
 
     def close(self) -> None:
-        self._mss.close()
+        """Retained for adapter compatibility; captures own their handles."""

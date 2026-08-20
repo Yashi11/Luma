@@ -1,35 +1,40 @@
-# User-Annotated Visual Copilot for macOS
+# Visual Copilot for macOS
 
-V1 foundation for a privacy-first, explicit visual explanation flow:
+Point at anything on your Mac and ask about it without changing context.
 
-`hotkey → rectangle selection → exact in-memory crop → preview → explain`
+Visual Copilot reuses the CoCo Electron shell while replacing its default continuous-observation path with an explicit, user-initiated flow:
 
-The capture, lifecycle, OpenAI provider, and outbound-data contracts live in `src/visual_copilot`. The package remains independent of Electron so these invariants can be tested before the adapter is wired into the CoCo shell.
+`hotkey → rectangle selection → exact in-memory crop → preview/question → explain`
+
+## V1 privacy contract
+
+Only a decoded, dimension-checked PNG cryptographically bound to the frozen selection context can reach the OpenAI provider adapter. The question defaults to `Explain this.` and outbound metadata is allowlisted. No AX data, app/window identity, cursor history, arbitrary image bytes, screenshot path, observer history, or full-monitor fallback is accepted.
+
+The V1 model receives no tools and returns structured `{explanation, uncertainty, needs_more_context}` data. If more context is needed, the answer card offers a new selection rather than silently broadening capture.
+
+## Architecture
+
+- **CoCo Electron shell:** global shortcut, interactive `SelectionOverlay`, preview/question card, answer card, and trusted main-process IPC.
+- **Python selection service:** immutable display snapshot, DIP-to-pixel mapping, region-only `mss` capture, PNG verification, hash/provenance, cancellation, and retry lifecycle.
+- **OpenAI Responses API:** base64 PNG input, structured output, `store=False`, and no tools.
+
+The observer, observer input listeners, old full-monitor hotkey route, TTS, Accessibility enrichment, dataset collection, and autonomous actions are disabled for V1. CoCo's intentional avatar, settings, conversation, and local-history surfaces remain available.
 
 ## Development
 
 ```bash
-uv sync --extra capture
-uv run python -m unittest discover -s tests -v
+uv sync
+uv run pytest
+
+cd desktop
+npm install
+npm start
 ```
 
-Set `OPENAI_API_KEY` before making a provider request. The provider uses the official OpenAI Responses API at `https://api.openai.com/v1`, defaults to `gpt-5.6`, sends the PNG as a base64 image input, requests structured output, disables response storage, and supplies no tools.
+Set `OPENAI_API_KEY` before sending a selection. The OpenAI endpoint is fixed to `https://api.openai.com/v1`; the default model is `gpt-5.6` and can be changed in the trusted service configuration.
 
-Actual screen capture uses the optional `capture` extra (`mss` and Pillow). Pure contract tests remain runnable without macOS screen permission or capture dependencies.
+See [docs/architecture.md](docs/architecture.md) for the implemented contracts and remaining test matrix.
 
-## V1 privacy contract
+## Upstream
 
-Only a decoded, dimension-checked PNG cryptographically bound to the frozen selection context can reach the provider adapter. The user question defaults to `Explain this.` and outbound metadata is allowlisted. No AX data, app/window identity, cursor history, arbitrary image bytes, or screenshot path is accepted by the outbound gate.
-
-## Electron integration contract
-
-`LocalSelectionService` is the trusted main-process boundary. Give its per-launch capability token only to the CoCo main-process adapter, never to arbitrary page content. The required order is:
-
-1. `activate` with the active display snapshot;
-2. `freeze` after mouse-up;
-3. hide the complete overlay and wait for the hidden-state acknowledgement;
-4. call `overlay_hidden`, then `capture`;
-5. show the returned PNG locally and call `preview` with the question;
-6. call `send` only after Enter, or `cancel` on Escape.
-
-The V1 CoCo startup path must not start the continuous observer or register its old full-monitor capture handler. This repository does not contain the CoCo Electron source, so that final shell wiring must be applied in the CoCo checkout.
+The desktop shell is based on [collaborative-agents/coco](https://github.com/collaborative-agents/coco) under the Apache License 2.0. See [LICENSE](LICENSE) and [PRIVACY.md](PRIVACY.md).
