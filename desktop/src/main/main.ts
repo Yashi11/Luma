@@ -153,6 +153,7 @@ let tray: Tray | null = null;
 let hideAvatarMode = false;
 let avatarRendererReady = false;
 let pendingOpenHistory = false;
+let cocoSleeping = false;
 const observationSleepGuard = new ObservationSleepGuard();
 let wakeWordService: WakeWordService | null = null;
 let wakeWordEnabled = false;
@@ -172,6 +173,8 @@ let pendingWakeWordDetection: {
 const WAKE_WORDS = ['COCO', 'HI COCO', 'HEY COCO'] as const;
 const WAKE_WORD_MODEL =
   'sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01';
+
+const isCocoSleeping = () => cocoSleeping;
 
 const wakeWordSettingsPath = () =>
   path.join(app.getPath('userData'), 'wake-word.json');
@@ -699,8 +702,9 @@ const createWakeWordCaptureWindow = (): void => {
 const syncWakeWordService = (): void => {
   if (!wakeWordService) return;
   if (!wakeWordEnabled) wakeWordService.stop('disabled');
-  else if (systemSuspended) wakeWordService.stop('sleeping');
-  else wakeWordService.start();
+  else if (isCocoSleeping() || systemSuspended) {
+    wakeWordService.stop('sleeping');
+  } else wakeWordService.start();
 };
 
 const initializeWakeWordService = (): void => {
@@ -729,7 +733,7 @@ const initializeWakeWordService = (): void => {
     packagedExecutable: executable,
     onStatus: publishWakeWordStatus,
     onDetected: (keyword) => {
-      if (!wakeWordEnabled || systemSuspended) return;
+      if (!wakeWordEnabled || isCocoSleeping() || systemSuspended) return;
       log.info(`[Wake word] Detected ${keyword}`);
       queueWakeWordDetection(keyword);
     },
@@ -804,8 +808,11 @@ function createTray(): void {
     tray = new Tray(image);
     tray.on('click', handleTrayClick);
   }
-  tray.setToolTip('Coco');
   const pendingSetup = setupPending();
+  const sleeping = isCocoSleeping();
+  tray.setToolTip(
+    pendingSetup ? 'Coco' : `Coco — ${sleeping ? 'Sleeping' : 'Awake'}`,
+  );
   tray.setContextMenu(
     Menu.buildFromTemplate(pendingSetup ? [
       {
@@ -815,6 +822,21 @@ function createTray(): void {
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() },
     ] : [
+      {
+        label: sleeping ? 'Status: Sleeping' : 'Status: Awake',
+        enabled: false,
+      },
+      {
+        label: sleeping ? 'Wake Coco' : 'Put Coco to Sleep',
+        click: () => {
+          // Function declaration is intentionally below the tray setup.
+          // eslint-disable-next-line no-use-before-define
+          setCocoSleepMode(!sleeping).catch((err) =>
+            log.warn(`[Tray] Could not change sleep mode: ${err}`),
+          );
+        },
+      },
+      { type: 'separator' },
       {
         label: 'Open Chat',
         click: openPrimaryTrayAction,
@@ -1064,7 +1086,12 @@ ipcMain.handle(
     _event,
     { forceModelTest = false }: { forceModelTest?: boolean } = {},
   ) => {
-  type ModelAssessment = {
+    // Sleep mode intentionally stops the sensing and tutor services. Do not
+    // probe them or report their expected absence as a health failure.
+    if (isCocoSleeping()) {
+      return { checkedAt: Date.now(), sleeping: true };
+    }
+    type ModelAssessment = {
     status: ModelHealthAssessment['status'];
     detail: string;
   };
@@ -1636,6 +1663,60 @@ ipcMain.on('training-feedback', async (_event, payload) => {
   }
 });
 
+ipcMain.removeHandler('get-coco-sleep-mode');
+ipcMain.handle('get-coco-sleep-mode', () => ({
+  sleeping: isCocoSleeping(),
+}));
+
+async function setCocoSleepMode(sleeping: boolean) {
+  if (cocoSleeping === sleeping) {
+    return { success: true, sleeping };
+  }
+
+  // Make the requested state authoritative before service shutdown so health
+  // checks and wake-word callbacks cannot mistake an intentional pause for a
+  // failure or accept another interaction while shutdown is in progress.
+  cocoSleeping = sleeping;
+  syncWakeWordService();
+
+  if (sleeping) {
+    if (isSessionActive) endCurrentSession();
+    await Promise.all([
+      serviceManager.stopService('sensing-server'),
+      serviceManager.stopService('tutor-server'),
+    ]);
+  } else if (observerStarted) {
+    await serviceManager.startAll();
+  }
+
+  const state = { sleeping };
+  avatarWindow?.webContents.send('coco-sleep-mode-changed', state);
+  chatWindow?.webContents.send('coco-sleep-mode-changed', state);
+  wakeWordCaptureWindow?.webContents.send('coco-sleep-mode-changed', state);
+  if (tray && !tray.isDestroyed()) createTray();
+  return { success: true, sleeping };
+}
+
+ipcMain.removeHandler('set-coco-sleep-mode');
+ipcMain.handle(
+  'set-coco-sleep-mode',
+  async (_event, { sleeping }: { sleeping?: boolean } = {}) => {
+    if (typeof sleeping !== 'boolean') {
+      return { success: false, error: 'Invalid sleep mode.' };
+    }
+    try {
+      return await setCocoSleepMode(sleeping);
+    } catch (error) {
+      log.error('[Sleep] Could not change Coco sleep mode:', error);
+      return {
+        success: false,
+        sleeping: isCocoSleeping(),
+        error: (error as Error).message,
+      };
+    }
+  },
+);
+
 ipcMain.removeHandler('get-wake-word-settings');
 ipcMain.handle('get-wake-word-settings', () => ({
   enabled: wakeWordEnabled,
@@ -1759,6 +1840,7 @@ ipcMain.removeAllListeners('wake-word-audio-frame');
 ipcMain.on('wake-word-audio-frame', (event, frame: unknown) => {
   if (
     !wakeWordEnabled ||
+    isCocoSleeping() ||
     systemSuspended ||
     wakeWordCapturePaused ||
     !wakeWordCaptureWindow ||
