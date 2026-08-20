@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "visual-copilot"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["openai>=2.0,<3"]
 
 [project.optional-dependencies]
 capture = ["mss>=9.0", "Pillow>=10.0"]

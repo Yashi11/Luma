@@ -1,8 +1,11 @@
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 import unittest
+
 from visual_copilot.geometry import DisplaySnapshot, Rectangle, map_selection_to_crop
+
 
 class GeometryTests(unittest.TestCase):
     def setUp(self):
@@ -20,5 +23,11 @@ class GeometryTests(unittest.TestCase):
     def test_rejects_tiny_selection(self):
         with self.assertRaises(ValueError):
             map_selection_to_crop(Rectangle(1, 1, 23, 24), self.display)
+
+    def test_rejects_non_finite_geometry_and_rotation(self):
+        with self.assertRaises(ValueError):
+            map_selection_to_crop(Rectangle(float("nan"), 1, 24, 24), self.display)
+        with self.assertRaisesRegex(ValueError, "rotated displays"):
+            map_selection_to_crop(Rectangle(1, 1, 24, 24), DisplaySnapshot(100, 100, 100, 100, 90))
 
 if __name__ == "__main__": unittest.main()
