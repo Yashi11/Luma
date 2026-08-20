@@ -27,10 +27,10 @@ class PrivacyTests(unittest.TestCase):
             self.crop,
             self.context,
             "",
-            {"provider": "openai", "model": "gpt-5.6"},
+            {"provider": "openai", "model": "gpt-5.6-sol"},
         )
         self.assertEqual(request.question, DEFAULT_QUESTION)
-        self.assertEqual(request.metadata, {"provider": "openai", "model": "gpt-5.6"})
+        self.assertEqual(request.metadata, {"provider": "openai", "model": "gpt-5.6-sol"})
         with self.assertRaisesRegex(ValueError, "forbidden"):
             build_strict_request(
                 self.crop,

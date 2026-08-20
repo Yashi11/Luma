@@ -42,7 +42,7 @@ class ServiceTests(unittest.TestCase):
             InMemoryRegionCapture(lambda region: make_png(region["width"], region["height"])),
             self.provider,
             lambda display_id: self.display,
-            {"provider": "openai", "model": "gpt-5.6"},
+            {"provider": "openai", "model": "gpt-5.6-sol"},
         )
         self.token = self.service.capability_token
         self.display_payload = {

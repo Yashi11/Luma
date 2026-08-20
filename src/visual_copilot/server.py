@@ -10,7 +10,8 @@ from typing import Annotated, Any
 
 import mss
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from visual_copilot.capture import MssRegionCapture
@@ -42,23 +43,39 @@ class PreviewBody(StrictModel):
 def _resolve_display(payload: Mapping[str, object]) -> DisplaySnapshot:
     """Bind Electron DIP geometry to the current native MSS monitor bounds."""
     electron = parse_display_snapshot(payload)
-    expected_width = round(electron.dip_width * electron.scale_x)
-    expected_height = round(electron.dip_height * electron.scale_y)
-    with mss.mss() as capture:
-        monitors = capture.monitors[1:]
-    candidates = [
-        monitor
-        for monitor in monitors
-        if abs(monitor["width"] - expected_width) <= 2
-        and abs(monitor["height"] - expected_height) <= 2
-    ]
+    with mss.MSS() as capture:
+        candidates = [
+            monitor
+            for monitor in capture.monitors[1:]
+            if monitor["width"] > 0 and monitor["height"] > 0
+        ]
     if not candidates:
-        raise ValueError("active display could not be matched to a capture monitor")
-    guessed_left = round(electron.dip_left * electron.scale_x)
-    guessed_top = round(electron.dip_top * electron.scale_y)
+        raise PermissionError(
+            "Screen Recording permission is required. Allow Coco (or your terminal in "
+            "development) in System Settings > Privacy & Security > Screen & System Audio Recording."
+        )
+    expected_sizes = (
+        (electron.dip_width, electron.dip_height, electron.dip_left, electron.dip_top),
+        (
+            electron.capture_width,
+            electron.capture_height,
+            electron.capture_left,
+            electron.capture_top,
+        ),
+    )
+
+    def match_score(monitor: Mapping[str, int]) -> float:
+        return min(
+            abs(monitor["width"] - width)
+            + abs(monitor["height"] - height)
+            + abs(monitor["left"] - left)
+            + abs(monitor["top"] - top)
+            for width, height, left, top in expected_sizes
+        )
+
     monitor = min(
         candidates,
-        key=lambda item: abs(item["left"] - guessed_left) + abs(item["top"] - guessed_top),
+        key=match_score,
     )
     resolved = DisplaySnapshot(
         dip_width=electron.dip_width,
@@ -81,7 +98,7 @@ def create_app() -> FastAPI:
     token = os.environ.get("VISUAL_COPILOT_CAPABILITY_TOKEN", "")
     if len(token) < 32:
         raise RuntimeError("VISUAL_COPILOT_CAPABILITY_TOKEN must be set by Electron")
-    model = os.environ.get("OPENAI_MODEL", "gpt-5.6").strip() or "gpt-5.6"
+    model = os.environ.get("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
     displays: dict[str, DisplaySnapshot] = {}
 
     def current_display(display_id: str) -> DisplaySnapshot:
@@ -98,6 +115,14 @@ def create_app() -> FastAPI:
         capability_token=token,
     )
     app = FastAPI(title="Visual Copilot Selection Service", docs_url=None, redoc_url=None)
+
+    @app.exception_handler(PermissionError)
+    async def permission_error(_request: Request, error: PermissionError) -> JSONResponse:
+        return JSONResponse(status_code=403, content={"detail": str(error)})
+
+    @app.exception_handler(ValueError)
+    async def validation_error(_request: Request, error: ValueError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(error)})
 
     def authorize(authorization: Annotated[str | None, Header()] = None) -> str:
         supplied = authorization.removeprefix("Bearer ") if authorization else ""

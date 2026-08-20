@@ -195,6 +195,8 @@ interface ServiceHealthView {
   checkedAt: number;
   sensing: ServiceHealth;
   tutor: ServiceHealth;
+  mode?: 'visual-copilot';
+  visualCopilot?: ServiceHealth;
 }
 
 interface SleepingServiceHealthView {
@@ -415,6 +417,8 @@ const MODE_OPTIONS = [
   { id: 'everyday_support', label: 'Everyday Support' },
   { id: 'student_learning', label: 'Student Learning' },
 ];
+const VISUAL_COPILOT_MODE =
+  new URLSearchParams(window.location.search).get('mode') === 'visual-copilot';
 
 function TutorMessage({ text }: { text: string }) {
   const g = parseGuidance(text);
@@ -1738,18 +1742,33 @@ export default function SessionChatView() {
           : []),
       ].join('\n')
     : 'Tutor model for this conversation';
-  const sensingUnavailable = serviceHealth?.sensing.connected === false;
-  const tutorUnavailable = serviceHealth?.tutor.connected === false;
-  const serviceUnavailable = sensingUnavailable || tutorUnavailable;
-  const modelUnavailable = Boolean(serviceHealth && [
+  const visualCopilotOnly = serviceHealth?.mode === 'visual-copilot';
+  const visualCopilotMode = VISUAL_COPILOT_MODE || visualCopilotOnly;
+  const visualCopilotHealth = serviceHealth?.visualCopilot;
+  const settingsHealthRows: Array<[
+    string,
+    string,
+    ServiceHealth | undefined,
+  ]> = visualCopilotMode
+    ? [['visual-copilot', 'Visual Copilot', visualCopilotHealth]]
+    : [
+        ['sensing', 'Sensing server', serviceHealth?.sensing],
+        ['tutor', 'Tutor agent', serviceHealth?.tutor],
+      ];
+  const sensingUnavailable = !visualCopilotOnly && serviceHealth?.sensing.connected === false;
+  const tutorUnavailable = !visualCopilotOnly && serviceHealth?.tutor.connected === false;
+  const serviceUnavailable = visualCopilotOnly
+    ? visualCopilotHealth?.connected === false
+    : sensingUnavailable || tutorUnavailable;
+  const modelUnavailable = !visualCopilotOnly && Boolean(serviceHealth && [
     serviceHealth.sensing,
     serviceHealth.tutor,
   ].some((health) => health.modelAssessment?.status === 'failed'));
-  const modelsVerified = Boolean(serviceHealth && [
+  const modelsVerified = visualCopilotOnly || Boolean(serviceHealth && [
     serviceHealth.sensing,
     serviceHealth.tutor,
   ].every((health) => health.modelAssessment?.status === 'verified'));
-  const modelConfigurationIssue = Boolean(serviceHealth && [
+  const modelConfigurationIssue = !visualCopilotOnly && Boolean(serviceHealth && [
     serviceHealth.sensing,
     serviceHealth.tutor,
   ].some((health) =>
@@ -1781,6 +1800,7 @@ export default function SessionChatView() {
     ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
     : serviceUnavailable
       ? [
+          visualCopilotOnly ? 'Visual Copilot service is not reachable.' : '',
           sensingUnavailable ? 'Sensing server is not reachable.' : '',
           tutorUnavailable ? 'Tutor agent is not reachable.' : '',
           'Click to open Settings.',
@@ -1798,7 +1818,9 @@ export default function SessionChatView() {
         : modelConfigurationIssue
           ? 'A saved model configuration is required. Click to open Settings.'
           : serviceHealth
-            ? 'Local services and configured models passed their connection tests.'
+            ? visualCopilotOnly
+              ? visualCopilotHealth?.detail || 'Visual Copilot is ready.'
+              : 'Local services and configured models passed their connection tests.'
             : 'Checking local service health.';
   const hasChatHealthIssue =
     !cocoSleeping &&
@@ -1907,7 +1929,9 @@ export default function SessionChatView() {
           <div style={S.helpText}>
             {cocoSleeping
               ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
-              : "Checks Coco's local services and sends short real requests to the configured models. The sensing test includes a small test image."}
+              : visualCopilotMode
+                ? 'Checks the authenticated local selection service. OpenAI is contacted only after you explicitly send a selected region.'
+                : "Checks Coco's local services and sends short real requests to the configured models. The sensing test includes a small test image."}
           </div>
           {cocoSleeping && (
             <div role="status" style={S.healthDetail}>
@@ -1916,10 +1940,7 @@ export default function SessionChatView() {
           )}
           {!cocoSleeping && (
             <div style={S.healthList}>
-            {([
-              ['sensing', 'Sensing server', serviceHealth?.sensing],
-              ['tutor', 'Tutor agent', serviceHealth?.tutor],
-            ] as const).map(([key, label, health]) => {
+            {settingsHealthRows.map(([key, label, health]) => {
               const serviceStatusLabel = health
                 ? `${health.connected ? 'Connected' : 'Not connected'} (service)`
                 : `${healthLoading ? 'Checking…' : 'Not checked'} (service)`;
@@ -2009,6 +2030,8 @@ export default function SessionChatView() {
               Health check failed: {healthError}
             </div>
           )}
+          {!visualCopilotMode && (
+            <>
           <div style={S.sectionDivider} />
 
           <div style={S.groupLabel}>Voice activation</div>
@@ -2313,6 +2336,8 @@ export default function SessionChatView() {
                 </div>
               )}
               <div style={S.sectionDivider} />
+            </>
+          )}
           <div style={S.groupLabel}>Desktop</div>
           <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
             <input

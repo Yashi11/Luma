@@ -86,7 +86,7 @@ export default class SelectionController {
       'visual-copilot-server',
       {
         VISUAL_COPILOT_CAPABILITY_TOKEN: this.token,
-        OPENAI_MODEL: process.env.OPENAI_MODEL?.trim() || 'gpt-5.6',
+        OPENAI_MODEL: process.env.OPENAI_MODEL?.trim() || 'gpt-5.6-sol',
         ...(process.env.OPENAI_API_KEY?.trim()
           ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY.trim() }
           : {}),

@@ -507,7 +507,9 @@ const createChatWindow = () => {
     webPreferences: { preload: preloadPath(), backgroundThrottling: false },
   });
 
-  chatWindow.loadURL(`${resolveHtmlPath('index.html')}?view=session`);
+  chatWindow.loadURL(
+    `${resolveHtmlPath('index.html')}?view=session&mode=visual-copilot`,
+  );
 
   const reportChatContentZoom = () => {
     if (!chatWindow || chatWindow.isDestroyed()) return;
@@ -1114,6 +1116,53 @@ ipcMain.handle(
     // probe them or report their expected absence as a health failure.
     if (isCocoSleeping()) {
       return { checkedAt: Date.now(), sleeping: true };
+    }
+    if (VISUAL_COPILOT_MODE) {
+      const visualCopilotPort = process.env.VISUAL_COPILOT_PORT || '8082';
+      try {
+        const response = await axios.get(
+          `http://127.0.0.1:${visualCopilotPort}/health`,
+          { timeout: 2500 },
+        );
+        const model =
+          typeof response.data?.model === 'string'
+            ? response.data.model
+            : 'gpt-5.6-sol';
+        const visualCopilot = {
+          connected: true,
+          status: 'healthy',
+          detail: `OpenAI · ${model}`,
+        };
+        return {
+          checkedAt: Date.now(),
+          mode: 'visual-copilot',
+          visualCopilot,
+          // Compatibility fields keep older renderer builds from showing a
+          // false outage while users restart during development.
+          sensing: visualCopilot,
+          tutor: visualCopilot,
+        };
+      } catch (error) {
+        const detail = axios.isAxiosError(error)
+          ? error.code === 'ECONNREFUSED'
+            ? 'Visual Copilot service is not running.'
+            : error.message
+          : error instanceof Error
+            ? error.message
+            : 'Visual Copilot service is unavailable.';
+        const visualCopilot = {
+          connected: false,
+          status: 'unavailable',
+          detail,
+        };
+        return {
+          checkedAt: Date.now(),
+          mode: 'visual-copilot',
+          visualCopilot,
+          sensing: visualCopilot,
+          tutor: visualCopilot,
+        };
+      }
     }
     type ModelAssessment = {
     status: ModelHealthAssessment['status'];

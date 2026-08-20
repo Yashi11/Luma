@@ -43,7 +43,7 @@ class OpenAIVisionProvider:
     def __init__(
         self,
         *,
-        model: str = "gpt-5.6",
+        model: str = "gpt-5.6-sol",
         detail: str = "original",
         client: Any | None = None,
         timeout_seconds: float = 30.0,

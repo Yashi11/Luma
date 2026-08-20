@@ -38,7 +38,7 @@ class ProviderTests(unittest.TestCase):
             lambda region: make_png(region["width"], region["height"])
         ).capture(context, context.display)
         request = build_strict_request(
-            crop, context, "What is this?", {"provider": "openai", "model": "gpt-5.6"}
+            crop, context, "What is this?", {"provider": "openai", "model": "gpt-5.6-sol"}
         )
         responses = FakeResponses()
         result = OpenAIVisionProvider(
@@ -46,6 +46,7 @@ class ProviderTests(unittest.TestCase):
         ).explain_selection(request)
 
         self.assertEqual(result.explanation, "A settings panel.")
+        self.assertEqual(responses.kwargs["model"], "gpt-5.6-sol")
         self.assertEqual(responses.kwargs["tools"], [])
         self.assertFalse(responses.kwargs["store"])
         self.assertTrue(

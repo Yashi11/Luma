@@ -31,7 +31,7 @@ npm install
 npm start
 ```
 
-Set `OPENAI_API_KEY` before sending a selection. The OpenAI endpoint is fixed to `https://api.openai.com/v1`; the default model is `gpt-5.6` and can be changed in the trusted service configuration.
+Set `OPENAI_API_KEY` before sending a selection. The OpenAI endpoint is fixed to `https://api.openai.com/v1`; the default model is `gpt-5.6-sol` and can be changed in the trusted service configuration.
 
 See [docs/architecture.md](docs/architecture.md) for the implemented contracts and remaining test matrix.
 
