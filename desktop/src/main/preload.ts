@@ -90,6 +90,9 @@ export type Channels =
   | 'help-request'
   // Explicit user reaction (bubble engage/dismiss) → sensing /feedback
   | 'training-feedback'
+  | 'get-coco-sleep-mode'
+  | 'set-coco-sleep-mode'
+  | 'coco-sleep-mode-changed'
   | 'get-wake-word-settings'
   | 'set-wake-word-settings'
   | 'wake-word-settings-changed'
