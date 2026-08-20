@@ -113,14 +113,17 @@ class TutorSystem:
         tutor_output: str,
         image_paths: list[str] | None,
         llm_metrics: dict | None = None,
+        *,
+        session_id: str | None = None,
+        event_ts: float | None = None,
     ) -> None:
         """Record the tutor LLM call (input + generated guidance) for training."""
         if self._recorder is None:
             return
         try:
             self._recorder.log_tutor(
-                ts=time.time(),
-                session_id=None,  # the tutor process doesn't track the Mongo session id
+                ts=event_ts if event_ts is not None else time.time(),
+                session_id=session_id,
                 trigger=trigger,
                 scenario=self._scenario,
                 model=getattr(self.tutor_agent, "model", ""),
