@@ -94,3 +94,60 @@ def test_recent_observations_treats_thumbs_down_as_negative_feedback():
 
     assert "user rated the resulting help as NEGATIVE" in block
     assert 'classify similar observations as "progress"' in block
+
+
+@pytest.mark.asyncio
+async def test_observer_input_includes_user_name_context(monkeypatch):
+    monkeypatch.setenv("COCO_USER_NAME", "Ada & Lin")
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+        scenario="everyday_support",
+    )
+    processor._build_context_prompt = AsyncMock(
+        return_value="<memory>\n(no memory yet)\n</memory>\n"
+    )
+    processor._collect_images = lambda text: (text, [])
+    captured = {}
+
+    def fake_observe(text_prompt, *_args, **_kwargs):
+        captured["text_prompt"] = text_prompt
+        return '{"need_support":"no"}', {}
+
+    monkeypatch.setattr(segment_processor, "_observe", fake_observe)
+
+    await processor._handle_observation(type="snapshot")
+
+    assert "<user_name>\nAda &amp; Lin\n</user_name>" in captured["text_prompt"]
+    prompt = segment_processor._load_observer_prompt("everyday_support")
+    assert "<user_name>" in prompt
+    assert "</user_name>" in prompt
+
+
+@pytest.mark.asyncio
+async def test_observer_input_omits_user_name_context_when_unset(monkeypatch):
+    monkeypatch.delenv("COCO_USER_NAME", raising=False)
+    processor = AiTutoringProcessor(
+        http_client=SimpleNamespace(),
+        tutor_url="http://localhost:8081",
+        ai_tutor_output_log="unused.log",
+        observer_model="provider/observer",
+        scenario="everyday_support",
+    )
+    processor._build_context_prompt = AsyncMock(
+        return_value="<memory>\n(no memory yet)\n</memory>\n"
+    )
+    processor._collect_images = lambda text: (text, [])
+    captured = {}
+
+    def fake_observe(text_prompt, *_args, **_kwargs):
+        captured["text_prompt"] = text_prompt
+        return '{"need_support":"no"}', {}
+
+    monkeypatch.setattr(segment_processor, "_observe", fake_observe)
+
+    await processor._handle_observation(type="snapshot")
+
+    assert "<user_name>" not in captured["text_prompt"]

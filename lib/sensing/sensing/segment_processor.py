@@ -27,6 +27,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
+from html import escape
 from pathlib import Path
 
 import httpx
@@ -590,6 +591,11 @@ class AiTutoringProcessor(SegmentProcessor):
         self._observer_model = observer_model
         self._scenario = scenario
         self._memory_engine = memory_engine
+        self._user_name = (
+            getattr(memory_engine, "user_name", None)
+            or os.environ.get("COCO_USER_NAME")
+            or ""
+        ).strip()
         self._memory_session_id: str | None = None
         # Per-session observer prompt (can be updated via set_scenario).
         self._observer_prompt: str = _load_observer_prompt(scenario)
@@ -1055,7 +1061,9 @@ class AiTutoringProcessor(SegmentProcessor):
     ) -> tuple[str, str, LLMCallMetrics]:
         from datetime import datetime as _dt
 
-        text = await self._build_context_prompt()
+        user_name_block = self._user_name_context_block()
+        text = f"{user_name_block}\n\n" if user_name_block else ""
+        text += await self._build_context_prompt()
         # In-context memory: recent observations + how the user reacted, so the
         # observer doesn't re-raise a suggestion the user just dismissed.
         recent_block = self._recent_observations_block(n=3)
@@ -1184,6 +1192,12 @@ class AiTutoringProcessor(SegmentProcessor):
             image_paths=suggestion_image_paths,
         )
         return obs, text, metrics
+
+    def _user_name_context_block(self) -> str:
+        """Build the observer prompt block containing the preferred user name."""
+        if not self._user_name:
+            return ""
+        return f"<user_name>\n{escape(self._user_name)}\n</user_name>"
 
     @staticmethod
     def _cleanup_consumed_screenshots(image_paths: list[str]) -> None:

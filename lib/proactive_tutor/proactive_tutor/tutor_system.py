@@ -3,6 +3,7 @@ import os
 import time
 from collections.abc import Callable
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ class TutorSystem:
         )
 
         self.problem_statement: str = ""
+        self.user_name: str = (os.environ.get("COCO_USER_NAME") or "").strip()
         # Long-term personalized context for worker/everyday scenarios, rendered as
         # the <memory> block (replaces <problem_statement> for those scenarios).
         # User-editable and persisted to disk so it carries across sessions and
@@ -222,6 +224,11 @@ class TutorSystem:
         self._ai_tools_capability_text = get_capabilities_for_tools(tool_ids)
         logger.info(f"[AI TOOLS] Configured: {tool_ids}")
 
+    def set_user_name(self, user_name: str) -> None:
+        """Configure the preferred name exposed to the tutor prompt."""
+        self.user_name = (user_name or "").strip()
+        logger.info("[USER NAME] Configured for tutor context")
+
     def set_scenario(self, scenario: str) -> None:
         """Switch to a different scenario, reloading prompts for the current model."""
         logger.info(f"[SET SCENARIO] {scenario}")
@@ -390,6 +397,9 @@ class TutorSystem:
             ctx_block,
             f"<conversation_history>\n{conv_block}\n</conversation_history>",
         ]
+        user_name_block = self._user_name_context_block()
+        if user_name_block:
+            parts.insert(0, user_name_block)
         ai_tools_block = self._ai_tools_context_block()
         if ai_tools_block:
             parts.append(ai_tools_block)
@@ -403,19 +413,27 @@ class TutorSystem:
     ) -> list[dict[str, Any]]:
         """Build normal chat messages with memory as separate system context."""
         memory = self.memory.strip() or "(no saved user memory)"
+        user_name_block = self._user_name_context_block()
+        profile_context = (f"{user_name_block}\n\n" if user_name_block else "") + (
+            "User memory follows. Use it only when relevant and do not "
+            f"mention this context explicitly.\n\n{memory}"
+        )
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "User memory follows. Use it only when relevant and do not "
-                    f"mention this context explicitly.\n\n{memory}"
-                ),
+                "content": profile_context,
             },
             *[dict(message) for message in self._chat_messages],
         ]
         if current_message is not None:
             messages.append(current_message)
         return messages
+
+    def _user_name_context_block(self) -> str:
+        """Build the prompt block containing the user's preferred name."""
+        if not self.user_name:
+            return ""
+        return f"<user_name>\n{escape(self.user_name)}\n</user_name>"
 
     def _handle_everyday_user_prompt(
         self,
