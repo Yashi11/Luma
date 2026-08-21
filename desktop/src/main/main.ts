@@ -793,10 +793,17 @@ async function openCoco(): Promise<void> {
 }
 
 function setupPending(): boolean {
+  if (VISUAL_COPILOT_MODE) return false;
   return !isOnboardingComplete() || !readModelConfiguration();
 }
 
 function openPrimaryTrayAction(): void {
+  if (VISUAL_COPILOT_MODE) {
+    selectionController?.activate().catch((error) => {
+      log.error('[Visual Copilot] activation failed', error);
+    });
+    return;
+  }
   if (setupPending()) {
     if (!onboardingWindow || onboardingWindow.isDestroyed()) {
       createOnboardingWindow(isOnboardingComplete());
@@ -810,6 +817,10 @@ function openPrimaryTrayAction(): void {
 }
 
 function handleTrayClick(): void {
+  if (VISUAL_COPILOT_MODE) {
+    openPrimaryTrayAction();
+    return;
+  }
   // Preserve the setup-window recovery path, but once setup is complete let
   // the user choose an explicit action instead of opening chat immediately.
   if (setupPending()) {
@@ -833,6 +844,21 @@ function createTray(): void {
     });
     tray = new Tray(image);
     tray.on('click', handleTrayClick);
+  }
+  if (VISUAL_COPILOT_MODE) {
+    tray.setToolTip('Visual Copilot — select an area to explain');
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        {
+          label: 'Select Area to Explain',
+          accelerator: 'CommandOrControl+Shift+Space',
+          click: openPrimaryTrayAction,
+        },
+        { type: 'separator' },
+        { label: 'Quit Visual Copilot', click: () => app.quit() },
+      ]),
+    );
+    return;
   }
   const pendingSetup = setupPending();
   const sleeping = isCocoSleeping();
@@ -3111,7 +3137,6 @@ const createWindow = async () => {
   }
 
   if (VISUAL_COPILOT_MODE) {
-    applyAvatarVisibility(readHideAvatarSetting());
     createTray();
     return;
   }
@@ -3490,9 +3515,11 @@ app
     }
 
     createWindow();
-    createWakeWordCaptureWindow();
-    // Keep chat state alive while its panel is closed.
-    createChatWindow();
+    if (!VISUAL_COPILOT_MODE) {
+      createWakeWordCaptureWindow();
+      // Keep chat state alive while its panel is closed.
+      createChatWindow();
+    }
 
     // Register global shortcut to toggle DevTools (Cmd/Ctrl+Shift+I)
     globalShortcut.register('CommandOrControl+Shift+I', () => {
@@ -3511,13 +3538,19 @@ app
     });
 
     // Cmd/Ctrl+Shift+H — toggle the observation history panel on the avatar.
-    globalShortcut.register('CommandOrControl+Shift+H', () => {
-      if (avatarWindow && !avatarWindow.isDestroyed()) {
-        avatarWindow.webContents.send('toggle-observation-history');
-      }
-    });
+    if (!VISUAL_COPILOT_MODE) {
+      globalShortcut.register('CommandOrControl+Shift+H', () => {
+        if (avatarWindow && !avatarWindow.isDestroyed()) {
+          avatarWindow.webContents.send('toggle-observation-history');
+        }
+      });
+    }
 
     app.on('activate', () => {
+      if (VISUAL_COPILOT_MODE) {
+        openPrimaryTrayAction();
+        return;
+      }
       // On macOS it's common to re-create a window in the app when the
       // dock icon is clicked and there are no other windows open.
       if (avatarWindow === null && chatWindow === null) createWindow();
