@@ -101,6 +101,11 @@ export default class SelectionController {
     const cursor = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursor);
     this.activeDisplayId = display.id;
+    log.info(
+      `[Visual Copilot] Active Electron display id=${display.id} ` +
+        `bounds=${JSON.stringify(display.bounds)} scale=${display.scaleFactor} ` +
+        `cursor=${JSON.stringify(cursor)}`,
+    );
     try {
       await this.waitUntilReady();
       const response = await this.api.post('/activate', {

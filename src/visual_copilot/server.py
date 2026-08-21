@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import logging
 import os
+import sys
 from collections.abc import Mapping
 from typing import Annotated, Any
 
@@ -18,6 +20,8 @@ from visual_copilot.capture import MssRegionCapture
 from visual_copilot.geometry import DisplaySnapshot
 from visual_copilot.provider import OpenAIVisionProvider
 from visual_copilot.service import LocalSelectionService, parse_display_snapshot
+
+LOGGER = logging.getLogger("visual_copilot.server")
 
 
 class StrictModel(BaseModel):
@@ -44,11 +48,34 @@ def _resolve_display(payload: Mapping[str, object]) -> DisplaySnapshot:
     """Bind Electron DIP geometry to the current native MSS monitor bounds."""
     electron = parse_display_snapshot(payload)
     with mss.MSS() as capture:
-        candidates = [
-            monitor
-            for monitor in capture.monitors[1:]
-            if monitor["width"] > 0 and monitor["height"] > 0
-        ]
+        candidates: list[Mapping[str, int]] = []
+        # On macOS Electron's Display.id is the CoreGraphics display ID. Use
+        # that identity directly: positions can use different coordinate
+        # transforms across Electron and CoreGraphics, and equal-size displays
+        # make geometry-only matching ambiguous.
+        if sys.platform == "darwin":
+            try:
+                native_id = int(electron.display_id)
+                rect = capture.core.CGDisplayBounds(native_id)
+                native_monitor = {
+                    "left": int(rect.origin.x),
+                    "top": int(rect.origin.y),
+                    "width": int(rect.size.width),
+                    "height": int(rect.size.height),
+                }
+                if native_monitor["width"] > 0 and native_monitor["height"] > 0:
+                    candidates = [native_monitor]
+            except (AttributeError, TypeError, ValueError):
+                LOGGER.warning(
+                    "Could not resolve CoreGraphics display id %s; using geometry fallback",
+                    electron.display_id,
+                )
+        if not candidates:
+            candidates = [
+                monitor
+                for monitor in capture.monitors[1:]
+                if monitor["width"] > 0 and monitor["height"] > 0
+            ]
     if not candidates:
         raise PermissionError(
             "Screen Recording permission is required. Allow Coco (or your terminal in "
@@ -76,6 +103,18 @@ def _resolve_display(payload: Mapping[str, object]) -> DisplaySnapshot:
     monitor = min(
         candidates,
         key=match_score,
+    )
+    LOGGER.info(
+        "Resolved Electron display %s bounds=(%s,%s %sx%s DIP) to native bounds=(%s,%s %sx%s)",
+        electron.display_id,
+        electron.dip_left,
+        electron.dip_top,
+        electron.dip_width,
+        electron.dip_height,
+        monitor["left"],
+        monitor["top"],
+        monitor["width"],
+        monitor["height"],
     )
     resolved = DisplaySnapshot(
         dip_width=electron.dip_width,
