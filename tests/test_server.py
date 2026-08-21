@@ -17,7 +17,9 @@ class FakeMss:
     ]
 
     def __init__(self):
-        self.core = SimpleNamespace(CGDisplayBounds=self.display_bounds)
+        self._impl = SimpleNamespace(
+            core=SimpleNamespace(CGDisplayBounds=self.display_bounds)
+        )
 
     @staticmethod
     def display_bounds(display_id):

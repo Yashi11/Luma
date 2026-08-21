@@ -44,6 +44,19 @@ class PreviewBody(StrictModel):
     question: str | None = None
 
 
+def _coregraphics_display_bounds(capture: mss.MSS, display_id: int) -> Mapping[str, int]:
+    """Return one native display's bounds across supported mss layouts."""
+    implementation = getattr(capture, "_impl", capture)
+    core = implementation.core
+    rect = core.CGDisplayBounds(display_id)
+    return {
+        "left": int(rect.origin.x),
+        "top": int(rect.origin.y),
+        "width": int(rect.size.width),
+        "height": int(rect.size.height),
+    }
+
+
 def _resolve_display(payload: Mapping[str, object]) -> DisplaySnapshot:
     """Bind Electron DIP geometry to the current native MSS monitor bounds."""
     electron = parse_display_snapshot(payload)
@@ -56,13 +69,7 @@ def _resolve_display(payload: Mapping[str, object]) -> DisplaySnapshot:
         if sys.platform == "darwin":
             try:
                 native_id = int(electron.display_id)
-                rect = capture.core.CGDisplayBounds(native_id)
-                native_monitor = {
-                    "left": int(rect.origin.x),
-                    "top": int(rect.origin.y),
-                    "width": int(rect.size.width),
-                    "height": int(rect.size.height),
-                }
+                native_monitor = _coregraphics_display_bounds(capture, native_id)
                 if native_monitor["width"] > 0 and native_monitor["height"] > 0:
                     candidates = [native_monitor]
             except (AttributeError, TypeError, ValueError):
