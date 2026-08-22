@@ -33,6 +33,7 @@ type PreviewState = {
 
 type VoiceEvent = {
   type: string;
+  action?: 'mute' | 'reselect' | 'close';
   text?: string;
   transcript?: string;
   delta?: string;
@@ -338,6 +339,12 @@ export default class SelectionController {
         this.voiceSocket.send(JSON.stringify({ type: 'stop' }));
       }
     });
+    ipcMain.removeAllListeners('selection-voice-cancel');
+    ipcMain.on('selection-voice-cancel', (event) => {
+      if (event.sender === this.previewWindow?.webContents) {
+        this.closeVoiceSocket();
+      }
+    });
     ipcMain.removeHandler('selection-voice-permission');
     ipcMain.handle('selection-voice-permission', async (event) => {
       if (event.sender !== this.previewWindow?.webContents) return false;
@@ -490,9 +497,12 @@ export default class SelectionController {
   }> {
     if (
       !this.sessionId ||
-      !['preview', 'answer'].includes(this.previewState.status)
+      !['preview', 'sending', 'answer'].includes(this.previewState.status)
     ) {
       return { error: 'Voice question is not available for this selection.' };
+    }
+    if (this.previewState.status === 'sending') {
+      log.info('[Visual Copilot] Starting barge-in voice turn');
     }
     this.closeVoiceSocket();
     this.closeNudgeSocket();
@@ -518,6 +528,7 @@ export default class SelectionController {
         socket.close();
       }, 15_000);
       socket.onmessage = (message) => {
+        if (this.voiceSocket !== socket) return;
         try {
           const voiceEvent = JSON.parse(String(message.data)) as VoiceEvent;
           if (voiceEvent.type === 'ready') finish({ ready: true });
@@ -577,6 +588,12 @@ export default class SelectionController {
         ],
         uncertainty: null,
         needsMoreContext: false,
+      };
+      this.publishPreview();
+    } else if (event.type === 'voice_control') {
+      this.previewState = {
+        ...this.previewState,
+        status: this.previewState.turns?.length ? 'answer' : 'preview',
       };
       this.publishPreview();
     } else if (event.type === 'error') {

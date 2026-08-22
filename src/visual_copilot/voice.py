@@ -335,6 +335,16 @@ class ElevenLabsStreamingSynthesizer:
                             )
 
                 await asyncio.gather(send_text(), receive_audio())
+            except asyncio.CancelledError:
+                websocket = self._socket
+                if websocket is not None:
+                    try:
+                        await websocket.send(
+                            json.dumps({"context_id": context_id, "close_context": True})
+                        )
+                    except (OSError, WebSocketException):
+                        await self._discard_socket()
+                raise
             except RuntimeError:
                 raise
             except (InvalidStatus, OSError, WebSocketException) as exc:

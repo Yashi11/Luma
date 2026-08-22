@@ -141,6 +141,12 @@ class LocalSelectionService:
     ) -> Explanation:
         return self._session(token, session_id).complete_stream(answer)
 
+    def complete_control(self, token: str, session_id: str) -> None:
+        self._session(token, session_id).complete_control()
+
+    def interrupt_stream(self, token: str, session_id: str) -> None:
+        self._session(token, session_id).interrupt_stream()
+
     def fail_stream(self, token: str, session_id: str, error: str) -> None:
         self._session(token, session_id).fail_stream(error)
 

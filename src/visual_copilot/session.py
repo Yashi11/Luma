@@ -161,6 +161,30 @@ class SelectionSession:
             self.state = SessionState.COMPLETED
             return self.result
 
+    def complete_control(self) -> None:
+        """Finish a semantic UI-control turn without adding it to dialogue history."""
+        with self._lock:
+            self._require(SessionState.SENDING)
+            self._pending_question = None
+            self.request = None
+            self.result = None
+            self.error = None
+            self.state = SessionState.CAPTURED
+
+    def interrupt_stream(self) -> None:
+        """Keep conversational context while abandoning an interrupted answer."""
+        with self._lock:
+            self._require(SessionState.SENDING)
+            if self._pending_question is not None:
+                self.conversation.append(ConversationTurn("user", self._pending_question))
+                if len(self.conversation) > 24:
+                    self.conversation = [self.conversation[0], *self.conversation[-23:]]
+            self._pending_question = None
+            self.request = None
+            self.result = None
+            self.error = None
+            self.state = SessionState.CAPTURED
+
     def fail_stream(self, error: str) -> None:
         with self._lock:
             self._require(SessionState.SENDING)

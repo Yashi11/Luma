@@ -28,6 +28,7 @@ type VoiceState =
 
 type VoiceEvent = {
   type: string;
+  action?: 'mute' | 'reselect' | 'close';
   text?: string;
   delta?: string;
   audio?: string;
@@ -44,11 +45,20 @@ export default function SelectionPreviewView() {
   const [streamAnswer, setStreamAnswer] = useState('');
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [voiceError, setVoiceError] = useState('');
+  const [muted, setMuted] = useState(false);
   const recorderRef = useRef<ActiveVoiceRecorder | null>(null);
   const pcmPlayerRef = useRef(new PcmStreamPlayer());
   const audioReceivedRef = useRef(false);
   const nudgeActiveRef = useRef(true);
   const beginVoiceRef = useRef<() => Promise<void>>(async () => {});
+  const startBargeMonitorRef = useRef<() => Promise<void>>(async () => {});
+  const setMutedRef = useRef<(nextMuted: boolean) => Promise<void>>(
+    async () => {},
+  );
+  const mutedRef = useRef(false);
+  const bargeMonitorActiveRef = useRef(false);
+  const ignoreAnswerAudioRef = useRef(false);
+  const playbackGenerationRef = useRef(0);
   const wakeWordPausedRef = useRef(false);
   const voiceTurnStartingRef = useRef(false);
   const serverSpeechEndedRef = useRef(false);
@@ -100,14 +110,14 @@ export default function SelectionPreviewView() {
           );
         } else if (event.type === 'nudge_error' && nudgeActiveRef.current) {
           speakAnswer(CONTEXT_NUDGE, () => {
-            if (!nudgeActiveRef.current) return;
+            if (!nudgeActiveRef.current || mutedRef.current) return;
             nudgeActiveRef.current = false;
             beginVoiceRef.current().catch(() => undefined);
           });
         } else if (event.type === 'nudge_complete' && nudgeActiveRef.current) {
           const beginAfterPlayback = async () => {
             await pcmPlayerRef.current.whenIdle();
-            if (!nudgeActiveRef.current) return;
+            if (!nudgeActiveRef.current || mutedRef.current) return;
             nudgeActiveRef.current = false;
             await beginVoiceRef.current();
           };
@@ -121,7 +131,9 @@ export default function SelectionPreviewView() {
           serverSpeechEndedRef.current = true;
           recorderRef.current?.stop();
         } else if (event.type === 'llm_start') {
+          ignoreAnswerAudioRef.current = false;
           setVoiceState('answering');
+          startBargeMonitorRef.current().catch(() => undefined);
         } else if (
           event.type === 'answer_delta' &&
           typeof event.delta === 'string'
@@ -129,7 +141,8 @@ export default function SelectionPreviewView() {
           setStreamAnswer((current) => current + event.delta);
         } else if (
           event.type === 'audio_chunk' &&
-          typeof event.audio === 'string'
+          typeof event.audio === 'string' &&
+          !ignoreAnswerAudioRef.current
         ) {
           audioReceivedRef.current = true;
           pcmPlayerRef.current.enqueue(
@@ -143,16 +156,24 @@ export default function SelectionPreviewView() {
             `${event.message || 'ElevenLabs streaming failed'}. Using native voice.`,
           );
         } else if (event.type === 'complete') {
-          setVoiceState('idle');
           const answer = typeof event.answer === 'string' ? event.answer : '';
+          const playbackGeneration = playbackGenerationRef.current;
           const listenAgain = async () => {
             if (audioReceivedRef.current) {
               await pcmPlayerRef.current.whenIdle();
             }
+            if (playbackGeneration !== playbackGenerationRef.current) return;
             if (
               mountedRef.current &&
-              !recorderRef.current &&
-              !voiceTurnStartingRef.current
+              !mutedRef.current &&
+              recorderRef.current
+            ) {
+              setVoiceState('listening');
+            } else if (
+              mountedRef.current &&
+              !mutedRef.current &&
+              !voiceTurnStartingRef.current &&
+              !bargeMonitorActiveRef.current
             ) {
               await beginVoiceRef.current();
             }
@@ -165,6 +186,16 @@ export default function SelectionPreviewView() {
             listenAgain().catch(() => undefined);
           }
           setStreamAnswer('');
+        } else if (event.type === 'voice_control') {
+          setQuestion('');
+          setStreamAnswer('');
+          if (event.action === 'mute') {
+            setMutedRef.current(true).catch(() => undefined);
+          } else if (event.action === 'reselect') {
+            window.electron.ipcRenderer.sendMessage('selection-retry');
+          } else if (event.action === 'close') {
+            window.electron.ipcRenderer.sendMessage('selection-cancel');
+          }
         } else if (event.type === 'error') {
           setVoiceState('idle');
           setVoiceError(event.message || 'Voice streaming failed.');
@@ -208,12 +239,14 @@ export default function SelectionPreviewView() {
   }, [speakAnswer, stopSpeech]);
 
   const handleVoice = async () => {
+    if (mutedRef.current || voiceTurnStartingRef.current) return;
     if (recorderRef.current) {
       recorderRef.current.stop();
       return;
     }
     stopSpeech();
     nudgeActiveRef.current = false;
+    ignoreAnswerAudioRef.current = false;
     pcmPlayerRef.current.prepare();
     audioReceivedRef.current = false;
     setVoiceError('');
@@ -232,6 +265,7 @@ export default function SelectionPreviewView() {
           'Microphone access is required. Enable Electron in System Settings > Privacy & Security > Microphone.',
         );
       }
+      if (mutedRef.current) throw new Error('Voice recording cancelled.');
       if (!wakeWordPausedRef.current) {
         await window.electron.ipcRenderer.invoke(
           'set-wake-word-capture-paused',
@@ -240,6 +274,7 @@ export default function SelectionPreviewView() {
         wakeWordPausedRef.current = true;
       }
       await prewarmVoiceRecorder();
+      if (mutedRef.current) throw new Error('Voice recording cancelled.');
       const start = (await window.electron.ipcRenderer.invoke(
         'selection-voice-start',
       )) as { ready?: boolean; error?: string } | undefined;
@@ -248,6 +283,7 @@ export default function SelectionPreviewView() {
           start?.error || 'Voice streaming service is unavailable.',
         );
       }
+      if (mutedRef.current) throw new Error('Voice recording cancelled.');
       streamStarted = true;
       const recorder = await startVoiceRecorder({
         silenceMs: 1_500,
@@ -268,7 +304,9 @@ export default function SelectionPreviewView() {
         window.electron.ipcRenderer.sendMessage('selection-voice-stop');
       }
       const message = error instanceof Error ? error.message : String(error);
-      if (message !== 'Voice recording cancelled.') setVoiceError(message);
+      if (message !== 'Voice recording cancelled.' && !mutedRef.current) {
+        setVoiceError(message);
+      }
       setVoiceState('idle');
     } finally {
       recorderRef.current = null;
@@ -277,15 +315,152 @@ export default function SelectionPreviewView() {
   };
   beginVoiceRef.current = handleVoice;
 
-  const voiceActive = voiceState === 'listening' || voiceState === 'speaking';
-  const voiceStatus = {
-    requesting: 'Opening the live voice stream…',
-    listening: 'Listening and transcribing live…',
-    speaking: 'Listening… I’ll send when you pause.',
-    transcribing: 'Deepgram is finalizing your question…',
-    answering: 'Answering and speaking as the response arrives…',
-    idle: 'Tap the microphone and ask about this selection.',
-  }[voiceState];
+  const startBargeMonitor = async () => {
+    if (
+      mutedRef.current ||
+      !mountedRef.current ||
+      recorderRef.current ||
+      bargeMonitorActiveRef.current
+    ) {
+      return;
+    }
+    bargeMonitorActiveRef.current = true;
+    let recorder: ActiveVoiceRecorder | null = null;
+    let speechStarted = false;
+    let streamReady = false;
+    let streamStarted = false;
+    let openInterruptedTurn: Promise<void> | null = null;
+    const queuedPcm: string[] = [];
+    try {
+      recorder = await startVoiceRecorder({
+        silenceMs: 1_500,
+        maxDurationMs: 120_000,
+        speechThreshold: 0.04,
+        minimumVoiceMs: 250,
+        onSpeechStart: () => {
+          if (speechStarted || mutedRef.current) return;
+          speechStarted = true;
+          playbackGenerationRef.current += 1;
+          ignoreAnswerAudioRef.current = true;
+          audioReceivedRef.current = false;
+          serverSpeechEndedRef.current = false;
+          stopSpeech();
+          setQuestion('');
+          setStreamAnswer('');
+          setVoiceError('');
+          setVoiceState('listening');
+          window.electron.ipcRenderer.sendMessage('selection-voice-cancel');
+          openInterruptedTurn = (async () => {
+            const start = (await window.electron.ipcRenderer.invoke(
+              'selection-voice-start',
+            )) as { ready?: boolean; error?: string } | undefined;
+            if (!start?.ready) {
+              throw new Error(
+                start?.error || 'Voice streaming service is unavailable.',
+              );
+            }
+            if (mutedRef.current) {
+              throw new Error('Voice recording cancelled.');
+            }
+            streamStarted = true;
+            streamReady = true;
+            queuedPcm
+              .splice(0)
+              .forEach((pcm) =>
+                window.electron.ipcRenderer.sendMessage(
+                  'selection-voice-audio',
+                  pcm,
+                ),
+              );
+          })();
+          openInterruptedTurn.catch(() => recorder?.stop());
+        },
+        onPcmChunk: (pcm) => {
+          if (!speechStarted) return;
+          if (streamReady) {
+            window.electron.ipcRenderer.sendMessage(
+              'selection-voice-audio',
+              pcm,
+            );
+          } else {
+            queuedPcm.push(pcm);
+          }
+        },
+        onStatus: (status) => {
+          if (speechStarted) setVoiceState(status);
+        },
+      });
+      recorderRef.current = recorder;
+      await recorder.done;
+      if (openInterruptedTurn) await openInterruptedTurn;
+      if (speechStarted && streamStarted) {
+        setVoiceState('transcribing');
+        if (!serverSpeechEndedRef.current) {
+          window.electron.ipcRenderer.sendMessage('selection-voice-stop');
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (speechStarted && streamStarted && !serverSpeechEndedRef.current) {
+        window.electron.ipcRenderer.sendMessage('selection-voice-stop');
+      }
+      if (
+        message !== 'Voice recording cancelled.' &&
+        !message.startsWith("I didn't hear any speech") &&
+        !mutedRef.current
+      ) {
+        setVoiceError(message);
+      }
+    } finally {
+      if (recorderRef.current === recorder) recorderRef.current = null;
+      bargeMonitorActiveRef.current = false;
+      if (
+        !speechStarted &&
+        mountedRef.current &&
+        !mutedRef.current &&
+        !recorderRef.current
+      ) {
+        window.setTimeout(
+          () => startBargeMonitorRef.current().catch(() => undefined),
+          0,
+        );
+      }
+    }
+  };
+  startBargeMonitorRef.current = startBargeMonitor;
+
+  const changeMuted = async (nextMuted: boolean) => {
+    mutedRef.current = nextMuted;
+    setMuted(nextMuted);
+    setVoiceError('');
+    if (nextMuted) {
+      playbackGenerationRef.current += 1;
+      nudgeActiveRef.current = false;
+      ignoreAnswerAudioRef.current = true;
+      recorderRef.current?.cancel();
+      window.electron.ipcRenderer.sendMessage('selection-voice-cancel');
+      stopSpeech();
+      setVoiceState('idle');
+      return;
+    }
+    await beginVoiceRef.current();
+  };
+  setMutedRef.current = changeMuted;
+
+  const voiceActive =
+    voiceState === 'listening' ||
+    voiceState === 'speaking' ||
+    voiceState === 'answering';
+  const voiceStatus = muted
+    ? 'Muted. Unmute whenever you want to continue.'
+    : {
+        requesting: 'Opening the live voice stream…',
+        listening: 'Listening and transcribing live…',
+        speaking: 'Listening… I’ll respond when you pause.',
+        transcribing: 'Understanding what you said…',
+        answering: 'Speaking — interrupt me whenever you want.',
+        idle: 'Listening starts automatically. Speak naturally.',
+      }[voiceState];
   const turns = state.turns ?? [];
   const isAnswering = Boolean(streamAnswer) && state.status !== 'answer';
 
@@ -302,16 +477,6 @@ export default function SelectionPreviewView() {
               <span>Live voice · selected pixels only</span>
             </div>
           </div>
-          <button
-            className="selection-icon-button"
-            type="button"
-            aria-label="Close"
-            onClick={() =>
-              window.electron.ipcRenderer.sendMessage('selection-cancel')
-            }
-          >
-            ×
-          </button>
         </header>
 
         {state.imageDataUrl && (
@@ -329,61 +494,20 @@ export default function SelectionPreviewView() {
                 I’ve got the screenshot
               </span>
               <p className="selection-context-nudge">{CONTEXT_NUDGE}</p>
-              <button
-                className={`selection-voice-button selection-voice-button--primary${
-                  voiceActive ? ' selection-voice-button--active' : ''
-                }`}
-                type="button"
-                aria-label={
-                  voiceActive
-                    ? 'Stop and send voice question'
-                    : 'Start voice question'
-                }
-                disabled={
-                  state.status === 'sending' ||
-                  voiceState === 'requesting' ||
-                  voiceState === 'transcribing' ||
-                  voiceState === 'answering'
-                }
-                onClick={() => handleVoice()}
+              <div
+                className={`selection-live-state${
+                  voiceActive ? ' selection-live-state--active' : ''
+                }${muted ? ' selection-live-state--muted' : ''}`}
               >
-                {voiceActive ? (
-                  <span className="selection-voice-stop" />
-                ) : (
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    width="32"
-                    height="32"
-                  >
-                    <path
-                      d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z"
-                      fill="currentColor"
-                    />
-                    <path
-                      d="M6.75 11.5a.75.75 0 0 1 1.5 0 3.75 3.75 0 0 0 7.5 0 .75.75 0 0 1 1.5 0 5.25 5.25 0 0 1-4.5 5.2V19h2a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5h2v-2.3a5.25 5.25 0 0 1-4.5-5.2Z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                )}
-              </button>
-              <div className="selection-voice-status">{voiceStatus}</div>
+                <span className="selection-live-state__dot" aria-hidden />
+                <span>{voiceStatus}</span>
+              </div>
               {question && (
                 <p className="selection-voice-transcript">“{question}”</p>
               )}
               {voiceError && (
                 <div className="selection-voice-error">{voiceError}</div>
               )}
-              <button
-                className="selection-reselect-link"
-                type="button"
-                disabled={voiceState !== 'idle'}
-                onClick={() =>
-                  window.electron.ipcRenderer.sendMessage('selection-retry')
-                }
-              >
-                Reselect screen area
-              </button>
             </section>
           )}
 
@@ -419,57 +543,16 @@ export default function SelectionPreviewView() {
                 </section>
               )}
             </div>
-            {voiceState !== 'idle' && (
-              <p className="selection-conversation__status">{voiceStatus}</p>
-            )}
+            <div
+              className={`selection-live-state selection-live-state--conversation${
+                voiceActive ? ' selection-live-state--active' : ''
+              }${muted ? ' selection-live-state--muted' : ''}`}
+            >
+              <span className="selection-live-state__dot" aria-hidden />
+              <span>{voiceStatus}</span>
+            </div>
             {voiceError && (
               <p className="selection-voice-error">{voiceError}</p>
-            )}
-            {state.status === 'answer' && (
-              <div className="selection-actions selection-actions--conversation">
-                <button
-                  className="selection-follow-up-button"
-                  type="button"
-                  aria-label="Ask a follow-up by voice"
-                  disabled={voiceState !== 'idle'}
-                  onClick={() => handleVoice()}
-                >
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    width="20"
-                    height="20"
-                  >
-                    <path
-                      d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z"
-                      fill="currentColor"
-                    />
-                    <path
-                      d="M6.75 11.5a.75.75 0 0 1 1.5 0 3.75 3.75 0 0 0 7.5 0 .75.75 0 0 1 1.5 0 5.25 5.25 0 0 1-4.5 5.2V19h2a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5h2v-2.3a5.25 5.25 0 0 1-4.5-5.2Z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                  Ask another question
-                </button>
-                <button
-                  className="selection-button selection-button--quiet"
-                  type="button"
-                  onClick={() =>
-                    window.electron.ipcRenderer.sendMessage('selection-cancel')
-                  }
-                >
-                  Done
-                </button>
-                <button
-                  className="selection-button selection-button--primary"
-                  type="button"
-                  onClick={() =>
-                    window.electron.ipcRenderer.sendMessage('selection-retry')
-                  }
-                >
-                  Select another area
-                </button>
-              </div>
             )}
           </article>
         )}
@@ -478,28 +561,33 @@ export default function SelectionPreviewView() {
           <div className="selection-error" role="alert">
             <span>Couldn’t complete that request</span>
             <p>{state.error}</p>
-            <div className="selection-actions">
-              <button
-                className="selection-button selection-button--quiet"
-                type="button"
-                onClick={() =>
-                  window.electron.ipcRenderer.sendMessage('selection-cancel')
-                }
-              >
-                Close
-              </button>
-              <button
-                className="selection-button selection-button--primary"
-                type="button"
-                onClick={() =>
-                  window.electron.ipcRenderer.sendMessage('selection-retry')
-                }
-              >
-                Try another selection
-              </button>
-            </div>
           </div>
         )}
+
+        <footer className="selection-voice-controls">
+          <button
+            className={`selection-button selection-button--quiet selection-mute-button${
+              muted ? ' selection-mute-button--muted' : ''
+            }`}
+            type="button"
+            aria-pressed={muted}
+            onClick={() => changeMuted(!muted)}
+          >
+            <span className="selection-mute-button__icon" aria-hidden>
+              {muted ? '○' : '●'}
+            </span>
+            {muted ? 'Unmute' : 'Mute'}
+          </button>
+          <button
+            className="selection-button selection-button--primary"
+            type="button"
+            onClick={() =>
+              window.electron.ipcRenderer.sendMessage('selection-retry')
+            }
+          >
+            Select another area
+          </button>
+        </footer>
       </section>
     </main>
   );

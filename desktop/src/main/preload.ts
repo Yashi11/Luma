@@ -118,6 +118,7 @@ export type Channels =
   | 'selection-voice-start'
   | 'selection-voice-audio'
   | 'selection-voice-stop'
+  | 'selection-voice-cancel'
   | 'selection-voice-event'
   | 'selection-retry';
 

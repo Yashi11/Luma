@@ -13,6 +13,7 @@ import sys
 import time
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 import mss
@@ -25,7 +26,7 @@ from websockets.exceptions import ConnectionClosed
 
 from visual_copilot.capture import MssRegionCapture
 from visual_copilot.geometry import DisplaySnapshot
-from visual_copilot.provider import CONTEXT_NUDGE, OpenAIVisionProvider
+from visual_copilot.provider import CONTEXT_NUDGE, OpenAIVisionProvider, VoiceControl
 from visual_copilot.service import LocalSelectionService, parse_display_snapshot
 from visual_copilot.voice import (
     DeepgramStreamingTranscriber,
@@ -33,6 +34,12 @@ from visual_copilot.voice import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
+
+
+@dataclass(frozen=True)
+class VoiceTurnResult:
+    answer: str = ""
+    control: VoiceControl | None = None
 
 
 class StrictModel(BaseModel):
@@ -341,7 +348,7 @@ async def _stream_answer(
     provider: OpenAIVisionProvider,
     synthesizer: ElevenLabsStreamingSynthesizer,
     request: Any,
-) -> str:
+) -> VoiceTurnResult:
     answer_started_at = time.perf_counter()
     first_audio_at: float | None = None
     queue: asyncio.Queue[str | None] = asyncio.Queue()
@@ -376,33 +383,49 @@ async def _stream_answer(
         except Exception as exc:
             await websocket.send_json({"type": "tts_error", "message": str(exc)})
 
-    tts_task = asyncio.create_task(stream_tts())
+    tts_task: asyncio.Task[None] | None = None
     answer_parts: list[str] = []
+    control: VoiceControl | None = None
     first_delta_at: float | None = None
     try:
-        async for delta in provider.stream_selection(request):
+        async for event in provider.stream_selection(request):
+            if event.control is not None:
+                control = event.control
+                continue
+            delta = event.text_delta
+            if not delta:
+                continue
             if first_delta_at is None:
                 first_delta_at = time.perf_counter()
                 LOGGER.info(
                     "[latency] llm_first_delta_ms=%.0f",
                     (first_delta_at - answer_started_at) * 1_000,
                 )
+                tts_task = asyncio.create_task(stream_tts())
             answer_parts.append(delta)
             await websocket.send_json({"type": "answer_delta", "delta": delta})
             await queue.put(delta)
-        await queue.put(None)
-        try:
-            await asyncio.wait_for(tts_task, timeout=45)
-        except TimeoutError:
-            tts_task.cancel()
-            await websocket.send_json(
-                {"type": "tts_error", "message": "ElevenLabs stream timed out"}
-            )
+        if tts_task is not None:
+            await queue.put(None)
+            try:
+                await asyncio.wait_for(tts_task, timeout=45)
+            except TimeoutError:
+                tts_task.cancel()
+                await websocket.send_json(
+                    {"type": "tts_error", "message": "ElevenLabs stream timed out"}
+                )
     finally:
-        if not tts_task.done():
+        if tts_task is not None and not tts_task.done():
             tts_task.cancel()
             await asyncio.gather(tts_task, return_exceptions=True)
     answer = "".join(answer_parts).strip()
+    if control is not None:
+        LOGGER.info(
+            "[latency] voice_control_ms=%.0f action=%s",
+            (time.perf_counter() - answer_started_at) * 1_000,
+            control,
+        )
+        return VoiceTurnResult(control=control)
     if not answer:
         raise RuntimeError("OpenAI response did not contain text")
     LOGGER.info(
@@ -410,7 +433,7 @@ async def _stream_answer(
         (time.perf_counter() - answer_started_at) * 1_000,
         len(answer),
     )
-    return answer
+    return VoiceTurnResult(answer=answer)
 
 
 def create_app() -> FastAPI:
@@ -419,6 +442,7 @@ def create_app() -> FastAPI:
         raise RuntimeError("VISUAL_COPILOT_CAPABILITY_TOKEN must be set by Electron")
     model = os.environ.get("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
     displays: dict[str, DisplaySnapshot] = {}
+    active_voice_tasks: dict[str, asyncio.Task[None]] = {}
 
     def current_display(display_id: str) -> DisplaySnapshot:
         try:
@@ -459,6 +483,9 @@ def create_app() -> FastAPI:
             else:
                 LOGGER.info("%s connection is prewarmed", name)
         yield
+        for task in active_voice_tasks.values():
+            task.cancel()
+        await asyncio.gather(*active_voice_tasks.values(), return_exceptions=True)
         await asyncio.gather(
             transcriber.close(),
             synthesizer.close(),
@@ -575,6 +602,10 @@ def create_app() -> FastAPI:
     @app.websocket("/sessions/{session_id}/voice")
     async def voice(websocket: WebSocket, session_id: str) -> None:
         turn_started_at = time.perf_counter()
+        turn_task = asyncio.current_task()
+        if turn_task is None:
+            await websocket.close(code=1011, reason="voice task is unavailable")
+            return
         protocols = {
             item.strip() for item in websocket.headers.get("sec-websocket-protocol", "").split(",")
         }
@@ -589,6 +620,12 @@ def create_app() -> FastAPI:
             return
         await websocket.accept(subprotocol=f"vc.{supplied}")
         try:
+            previous_task = active_voice_tasks.get(session_id)
+            if previous_task is not None and previous_task is not turn_task:
+                LOGGER.info("Interrupting prior voice turn for session=%s", session_id)
+                previous_task.cancel()
+                await asyncio.gather(previous_task, return_exceptions=True)
+            active_voice_tasks[session_id] = turn_task
             if service.state(supplied, session_id) not in {
                 "captured",
                 "completed",
@@ -598,17 +635,25 @@ def create_app() -> FastAPI:
             transcript = await _receive_pcm_transcript(websocket, transcriber)
             request = service.begin_stream(supplied, session_id, transcript)
             await websocket.send_json({"type": "llm_start", "transcript": transcript})
-            answer = await _stream_answer(websocket, provider, synthesizer, request)
-            service.complete_stream(supplied, session_id, answer)
-            await websocket.send_json({"type": "complete", "answer": answer})
+            result = await _stream_answer(websocket, provider, synthesizer, request)
+            if result.control is not None:
+                service.complete_control(supplied, session_id)
+                await websocket.send_json({"type": "voice_control", "action": result.control})
+            else:
+                service.complete_stream(supplied, session_id, result.answer)
+                await websocket.send_json({"type": "complete", "answer": result.answer})
             LOGGER.info(
                 "[latency] voice_turn_complete_ms=%.0f session=%s",
                 (time.perf_counter() - turn_started_at) * 1_000,
                 session_id,
             )
+        except asyncio.CancelledError:
+            if service.state(supplied, session_id) == "sending":
+                service.interrupt_stream(supplied, session_id)
+            LOGGER.info("Voice turn interrupted session=%s", session_id)
         except WebSocketDisconnect:
             if service.state(supplied, session_id) == "sending":
-                service.fail_stream(supplied, session_id, "voice client disconnected")
+                service.interrupt_stream(supplied, session_id)
         except Exception as exc:
             LOGGER.warning("Voice stream failed: %s", exc)
             if service.state(supplied, session_id) == "sending":
@@ -616,6 +661,8 @@ def create_app() -> FastAPI:
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.send_json({"type": "error", "message": str(exc)})
         finally:
+            if active_voice_tasks.get(session_id) is turn_task:
+                active_voice_tasks.pop(session_id, None)
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.close()
 

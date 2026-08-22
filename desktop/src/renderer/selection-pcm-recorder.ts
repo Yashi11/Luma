@@ -13,6 +13,9 @@ export interface ActiveVoiceRecorder {
 interface VoiceRecorderOptions {
   silenceMs?: number;
   maxDurationMs?: number;
+  speechThreshold?: number;
+  minimumVoiceMs?: number;
+  onSpeechStart?: () => void;
   onPcmChunk: (pcmBase64: string) => void;
   onStatus?: (status: VoiceRecorderStatus) => void;
 }
@@ -197,16 +200,21 @@ async function ensureCapture(): Promise<RecorderCapture> {
           (turn.noiseRms * turn.noiseFrames + rms) / (turn.noiseFrames + 1);
         turn.noiseFrames += 1;
       }
-      const threshold = Math.max(MIN_RMS, turn.noiseRms * 2.5);
+      const threshold = Math.max(
+        turn.options.speechThreshold ?? MIN_RMS,
+        turn.noiseRms * 2.5,
+      );
       const now = performance.now();
       if (rms >= threshold) {
         turn.speechCandidateMs += chunkMs;
         turn.lastVoiceAt = now;
         if (
           !turn.speechDetected &&
-          turn.speechCandidateMs >= SPEECH_CONFIRM_MS
+          turn.speechCandidateMs >=
+            (turn.options.minimumVoiceMs ?? SPEECH_CONFIRM_MS)
         ) {
           turn.speechDetected = true;
+          turn.options.onSpeechStart?.();
           turn.preSpeechChunks.forEach(turn.options.onPcmChunk);
           turn.preSpeechChunks.length = 0;
           turn.options.onStatus?.('speaking');

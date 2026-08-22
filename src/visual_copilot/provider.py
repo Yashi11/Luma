@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from .privacy import StrictOutboundRequest
+
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 @dataclass(frozen=True)
@@ -16,6 +19,15 @@ class Explanation:
     explanation: str
     uncertainty: str | None = None
     needs_more_context: bool = False
+
+
+VoiceControl = Literal["mute", "reselect", "close"]
+
+
+@dataclass(frozen=True)
+class VoiceStreamEvent:
+    text_delta: str | None = None
+    control: VoiceControl | None = None
 
 
 class VisionProvider(Protocol):
@@ -35,8 +47,51 @@ VOICE_STREAM_INSTRUCTION = (
     "If the user declines, proceed directly with the screenshot explanation instead of "
     "replying to the courtesy. If they add context or ask a question, incorporate it. "
     "Continue follow-up turns using the prior dialogue. Respond in concise, natural spoken prose. "
+    "Use a UI control tool only when the user is clearly asking to control Visual Copilot itself. "
+    "Declining context, saying no thanks, or other conversational courtesy is not a UI command. "
+    "When using a UI control tool, call it without also producing spoken text. "
     "Do not use markdown, headings, tables, or JSON."
 )
+
+VOICE_CONTROL_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "name": "mute_voice",
+        "description": (
+            "Mute Visual Copilot's microphone and audio when the user explicitly asks "
+            "to mute, stop listening, or be quiet."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "select_another_area",
+        "description": (
+            "Return to screen-area selection when the user asks to select, capture, "
+            "or look at a different area."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "close_visual_copilot",
+        "description": (
+            "Close the current Visual Copilot session only when the user explicitly asks "
+            "to close or end Visual Copilot. Never use this when the user merely declines "
+            "context, says no thanks to the context question, or declines an offer."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+]
+
+_VOICE_CONTROL_BY_TOOL: dict[str, VoiceControl] = {
+    "mute_voice": "mute",
+    "select_another_area": "reselect",
+    "close_visual_copilot": "close",
+}
 
 EXPLANATION_SCHEMA = {
     "type": "object",
@@ -174,8 +229,8 @@ class OpenAIVisionProvider:
     async def stream_selection(
         self,
         request: StrictOutboundRequest,
-    ) -> AsyncIterator[str]:
-        """Yield OpenAI Responses API text deltas for the voice-native path."""
+    ) -> AsyncIterator[VoiceStreamEvent]:
+        """Yield streamed speech text or one semantic UI control."""
         request.validate()
         if self._async_client is None:
             raise RuntimeError("OpenAI streaming client is unavailable")
@@ -185,17 +240,57 @@ class OpenAIVisionProvider:
             instructions=VOICE_STREAM_INSTRUCTION,
             input=_provider_input(request, encoded, self.detail),
             reasoning={"effort": "none"},
-            tools=[],
+            tools=VOICE_CONTROL_TOOLS,
+            tool_choice="auto",
+            parallel_tool_calls=False,
             store=False,
             stream=True,
             metadata=dict(request.metadata),
         )
+        emitted_call_ids: set[str] = set()
+        emitted_text = False
         async for event in stream:
-            if getattr(event, "type", "") != "response.output_text.delta":
-                continue
-            delta = getattr(event, "delta", "")
-            if isinstance(delta, str) and delta:
-                yield delta
+            event_type = getattr(event, "type", "")
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", "")
+                if isinstance(delta, str) and delta:
+                    emitted_text = True
+                    yield VoiceStreamEvent(text_delta=delta)
+            elif event_type == "response.function_call_arguments.done":
+                control = _VOICE_CONTROL_BY_TOOL.get(getattr(event, "name", ""))
+                call_id = getattr(event, "item_id", "")
+                if control is not None and call_id not in emitted_call_ids:
+                    emitted_call_ids.add(call_id)
+                    LOGGER.info("OpenAI voice_control_tool=%s", control)
+                    yield VoiceStreamEvent(control=control)
+            elif event_type == "response.output_item.done":
+                item = getattr(event, "item", None)
+                if getattr(item, "type", "") != "function_call":
+                    continue
+                control = _VOICE_CONTROL_BY_TOOL.get(getattr(item, "name", ""))
+                call_id = getattr(item, "id", "") or getattr(item, "call_id", "")
+                if control is not None and call_id not in emitted_call_ids:
+                    emitted_call_ids.add(call_id)
+                    LOGGER.info("OpenAI voice_control_tool=%s", control)
+                    yield VoiceStreamEvent(control=control)
+            elif event_type == "response.completed":
+                response = getattr(event, "response", None)
+                output = getattr(response, "output", ())
+                for item in output:
+                    if getattr(item, "type", "") != "function_call":
+                        continue
+                    control = _VOICE_CONTROL_BY_TOOL.get(getattr(item, "name", ""))
+                    call_id = getattr(item, "id", "") or getattr(item, "call_id", "")
+                    if control is not None and call_id not in emitted_call_ids:
+                        emitted_call_ids.add(call_id)
+                        LOGGER.info("OpenAI voice_control_tool=%s", control)
+                        yield VoiceStreamEvent(control=control)
+                if not emitted_text and not emitted_call_ids:
+                    LOGGER.warning(
+                        "OpenAI voice response completed without text or a known control; "
+                        "output_types=%s",
+                        [getattr(item, "type", "unknown") for item in output],
+                    )
 
 
 def _parse_explanation(payload: object) -> Explanation:
