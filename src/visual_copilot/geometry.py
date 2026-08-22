@@ -8,11 +8,32 @@ from typing import Literal, Protocol
 
 
 class SelectionGeometry(Protocol):
-    """Tagged geometry boundary; V1 currently accepts rectangles only."""
+    """Tagged geometry boundary shared by rectangular and freeform selections."""
 
     type: str
 
     def validate(self, minimum_dip: float = 24) -> None: ...
+
+    def as_dict(self) -> dict: ...
+
+
+@dataclass(frozen=True)
+class Point:
+    x: float
+    y: float
+
+    def validate(self) -> None:
+        values = (self.x, self.y)
+        if not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) for value in values
+        ):
+            raise TypeError("selection points must use numbers")
+        if not all(isfinite(value) for value in values):
+            raise ValueError("selection points must be finite")
+
+    def as_dict(self) -> dict[str, float]:
+        return {"x": self.x, "y": self.y}
+
 
 @dataclass(frozen=True)
 class Rectangle:
@@ -32,6 +53,61 @@ class Rectangle:
             raise ValueError(f"selection must be at least {minimum_dip}x{minimum_dip} DIP")
         if self.x < 0 or self.y < 0:
             raise ValueError("selection origin must be display-local and non-negative")
+
+    def as_dict(self) -> dict:
+        return {
+            "type": self.type,
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+        }
+
+
+@dataclass(frozen=True)
+class Freeform:
+    x: float
+    y: float
+    width: float
+    height: float
+    points: tuple[Point, ...]
+    type: Literal["freeform"] = "freeform"
+
+    def validate(self, minimum_dip: float = 24) -> None:
+        Rectangle(self.x, self.y, self.width, self.height).validate(minimum_dip)
+        if not 3 <= len(self.points) <= 512:
+            raise ValueError("freeform selection must contain 3 to 512 points")
+        for point in self.points:
+            if not isinstance(point, Point):
+                raise TypeError("freeform selection contains an invalid point")
+            point.validate()
+            if not self.x <= point.x <= self.x + self.width:
+                raise ValueError("freeform point exceeds its selection bounds")
+            if not self.y <= point.y <= self.y + self.height:
+                raise ValueError("freeform point exceeds its selection bounds")
+        doubled_area = abs(
+            sum(
+                point.x * self.points[(index + 1) % len(self.points)].y
+                - self.points[(index + 1) % len(self.points)].x * point.y
+                for index, point in enumerate(self.points)
+            )
+        )
+        if doubled_area / 2 < (minimum_dip * minimum_dip) / 4:
+            raise ValueError("freeform selection encloses too little area")
+
+    def as_dict(self) -> dict:
+        return {
+            "type": self.type,
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+            "points": [point.as_dict() for point in self.points],
+        }
+
+
+Selection = Rectangle | Freeform
+
 
 @dataclass(frozen=True)
 class DisplaySnapshot:
@@ -83,6 +159,7 @@ class DisplaySnapshot:
     def scale_y(self) -> float:
         return self.capture_height / self.dip_height
 
+
 @dataclass(frozen=True)
 class CropRegion:
     x: int
@@ -101,7 +178,8 @@ class CropRegion:
     def as_dict(self) -> dict[str, int]:
         return {"x": self.x, "y": self.y, "width": self.width, "height": self.height}
 
-def map_selection_to_crop(selection: Rectangle, display: DisplaySnapshot) -> CropRegion:
+
+def map_selection_to_crop(selection: SelectionGeometry, display: DisplaySnapshot) -> CropRegion:
     display.validate()
     selection.validate()
     if selection.x + selection.width > display.dip_width:

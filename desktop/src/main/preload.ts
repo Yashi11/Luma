@@ -110,6 +110,7 @@ export type Channels =
   | 'wake-word-capture-status'
   | 'wake-word-capture-renderer-ready'
   | 'wake-word-capture-window-ready'
+  | 'selection-activate'
   | 'selection-complete'
   | 'selection-cancel'
   | 'selection-preview-ready'

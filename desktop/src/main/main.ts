@@ -437,6 +437,14 @@ const createOnboardingWindow = (modelsOnly = false) => {
 const createAvatarWindow = () => {
   if (avatarWindow && !avatarWindow.isDestroyed()) return;
   avatarRendererReady = false;
+  const visualPetBounds = (() => {
+    if (!VISUAL_COPILOT_MODE) return {};
+    const { workArea } = screen.getPrimaryDisplay();
+    return {
+      x: workArea.x + workArea.width - 198,
+      y: workArea.y + workArea.height - 198,
+    };
+  })();
 
   // Start small (just the pet). The renderer grows the window via
   // 'resize-avatar-window' when a bubble or the history panel becomes visible,
@@ -446,6 +454,7 @@ const createAvatarWindow = () => {
     show: false,
     width: 180,
     height: 180,
+    ...visualPetBounds,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -454,13 +463,19 @@ const createAvatarWindow = () => {
     webPreferences: { preload: preloadPath() },
   });
 
-  avatarWindow.loadURL(resolveHtmlPath('index.html'));
+  avatarWindow.loadURL(
+    VISUAL_COPILOT_MODE
+      ? `${resolveHtmlPath('index.html')}?view=visual-copilot-pet`
+      : resolveHtmlPath('index.html'),
+  );
 
   avatarWindow.on('ready-to-show', () => {
     if (hideAvatarMode) {
       avatarWindow?.hide();
     } else if (process.env.START_MINIMIZED) {
       avatarWindow?.minimize();
+    } else if (VISUAL_COPILOT_MODE) {
+      avatarWindow?.showInactive();
     } else {
       avatarWindow?.show();
     }
@@ -795,6 +810,20 @@ async function openCoco(): Promise<void> {
   await createProactiveTutorSession(problemStatement, 120);
 }
 
+function activateVisualCopilot(): void {
+  selectionController?.activate().catch((error) => {
+    log.error('[Visual Copilot] activation failed', error);
+  });
+}
+
+function showVisualCopilotPet(): void {
+  if (!avatarWindow || avatarWindow.isDestroyed()) {
+    createAvatarWindow();
+    return;
+  }
+  avatarWindow.showInactive();
+}
+
 function setupPending(): boolean {
   if (VISUAL_COPILOT_MODE) return false;
   return !isOnboardingComplete() || !readModelConfiguration();
@@ -802,9 +831,7 @@ function setupPending(): boolean {
 
 function openPrimaryTrayAction(): void {
   if (VISUAL_COPILOT_MODE) {
-    selectionController?.activate().catch((error) => {
-      log.error('[Visual Copilot] activation failed', error);
-    });
+    showVisualCopilotPet();
     return;
   }
   if (setupPending()) {
@@ -849,13 +876,22 @@ function createTray(): void {
     tray.on('click', handleTrayClick);
   }
   if (VISUAL_COPILOT_MODE) {
-    tray.setToolTip('Visual Copilot — select an area to explain');
+    tray.setToolTip('Visual Copilot — click Coco to select an area');
     tray.setContextMenu(
       Menu.buildFromTemplate([
         {
-          label: 'Select Area to Explain',
-          accelerator: 'CommandOrControl+Shift+Space',
+          label: 'Show Coco',
           click: openPrimaryTrayAction,
+        },
+        {
+          label: 'Capture Area',
+          accelerator: 'CommandOrControl+Shift+Space',
+          click: () => {
+            log.info(
+              '[Visual Copilot] Activation requested by tray capture action',
+            );
+            activateVisualCopilot();
+          },
         },
         { type: 'separator' },
         { label: 'Quit Visual Copilot', click: () => app.quit() },
@@ -2068,6 +2104,23 @@ ipcMain.on('avatar-renderer-ready', () => {
   if (pendingOpenHistory) openHistory();
 });
 
+ipcMain.removeAllListeners('selection-activate');
+ipcMain.on('selection-activate', (event) => {
+  if (
+    !VISUAL_COPILOT_MODE ||
+    event.sender !== avatarWindow?.webContents
+  )
+    return;
+  if (selectionController?.showPreviewIfAvailable()) {
+    log.info('[Visual Copilot] Panel opened by explicit Coco click');
+    return;
+  }
+  log.info(
+    '[Visual Copilot] Capture requested by explicit Coco click; panel remains closed',
+  );
+  activateVisualCopilot();
+});
+
 // ── Proactive session IPC handlers ────────────────────────────────────────────
 
 // Webapp signals that a tutor session is now active (or has ended).
@@ -3140,6 +3193,7 @@ const createWindow = async () => {
   }
 
   if (VISUAL_COPILOT_MODE) {
+    createAvatarWindow();
     createTray();
     return;
   }
@@ -3178,6 +3232,10 @@ app.on('window-all-closed', () => {
 });
 
 app.on('second-instance', () => {
+  if (VISUAL_COPILOT_MODE) {
+    showVisualCopilotPet();
+    return;
+  }
   if (onboardingWindow && !onboardingWindow.isDestroyed()) {
     onboardingWindow.show();
     onboardingWindow.focus();
@@ -3468,6 +3526,11 @@ app
       visualCopilotCapabilityToken,
       preloadPath,
       resolveHtmlPath,
+      (overlayVisible) => {
+        if (!avatarWindow || avatarWindow.isDestroyed()) return;
+        if (overlayVisible) avatarWindow.hide();
+        else if (!isQuitting) avatarWindow.showInactive();
+      },
     );
     selectionController.startService();
     powerMonitor.on('suspend', () => {
@@ -3536,11 +3599,17 @@ app
       }
     });
 
-    // Explicit selection replaces CoCo's prior full-monitor capture route.
+    // The shortcut captures silently. The resulting panel remains gated on a
+    // later explicit Coco click.
     globalShortcut.register('CommandOrControl+Shift+Space', () => {
-      selectionController?.activate().catch((error) => {
-        log.error('[Visual Copilot] activation failed', error);
-      });
+      if (VISUAL_COPILOT_MODE) {
+        log.info(
+          '[Visual Copilot] Activation requested by global shortcut',
+        );
+        activateVisualCopilot();
+      } else {
+        activateVisualCopilot();
+      }
     });
 
     // Cmd/Ctrl+Shift+H — toggle the observation history panel on the avatar.

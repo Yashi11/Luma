@@ -8,6 +8,7 @@ import SessionChatView from './components/SessionChatView';
 import WakeWordCaptureView from './components/WakeWordCaptureView';
 import SelectionOverlay from './components/SelectionOverlay';
 import SelectionPreviewView from './components/SelectionPreviewView';
+import VisualCopilotPet from './components/VisualCopilotPet';
 
 const container = document.getElementById('root') as HTMLElement;
 const root = createRoot(container);
@@ -30,6 +31,8 @@ if (view === 'onboarding') {
   rendered = <SelectionOverlay />;
 } else if (view === 'selection-preview') {
   rendered = <SelectionPreviewView />;
+} else if (view === 'visual-copilot-pet') {
+  rendered = <VisualCopilotPet />;
 } else {
   rendered = <App />;
 }

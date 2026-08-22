@@ -14,7 +14,7 @@ The V1 invariant is that the observer path is not a capture trigger. No AX tree,
 
 ## Implemented runtime contracts
 
-- `SelectionCaptureContext` freezes a tagged rectangle, complete display bounds, configuration identity, mapped crop, timestamp, and capture ID.
+- `SelectionCaptureContext` freezes a tagged rectangle or freeform path, complete display bounds, configuration identity, mapped crop, timestamp, and capture ID. Freeform captures zero every pixel outside the lasso before provenance is attached.
 - Rotated displays and changed display snapshots fail closed in V1.
 - The capture adapter receives the frozen context rather than an arbitrary region. It captures only the absolute mapped crop and validates PNG structure, checksums, decoded dimensions, black/protected frames, 16 MP, and 10 MB limits.
 - `CapturedCrop` provenance binds the PNG hash, crop, and capture ID. The strict outbound gate rejects altered or caller-invented image bytes.

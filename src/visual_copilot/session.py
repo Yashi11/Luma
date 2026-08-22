@@ -8,7 +8,7 @@ from threading import RLock
 
 from .capture import CapturedCrop, RegionCapture
 from .context import SelectionCaptureContext
-from .geometry import DisplaySnapshot, Rectangle
+from .geometry import DisplaySnapshot, Selection
 from .privacy import ConversationTurn, StrictOutboundRequest, build_strict_request
 from .provider import CONTEXT_NUDGE, Explanation, VisionProvider
 
@@ -54,7 +54,7 @@ class SelectionSession:
                 f"state {self.state.value} does not allow this action; expected {allowed}"
             )
 
-    def freeze_geometry(self, selection: Rectangle) -> SelectionCaptureContext:
+    def freeze_geometry(self, selection: Selection) -> SelectionCaptureContext:
         with self._lock:
             self._require(SessionState.ACTIVE)
             self.context = SelectionCaptureContext.freeze(self.display, selection)

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from .geometry import CropRegion, DisplaySnapshot, Rectangle, map_selection_to_crop
+from .geometry import CropRegion, DisplaySnapshot, Selection, map_selection_to_crop
 
 
 @dataclass(frozen=True)
@@ -14,7 +14,7 @@ class SelectionCaptureContext:
     capture_id: str
     captured_at: str
     display: DisplaySnapshot
-    selection: Rectangle
+    selection: Selection
     crop: CropRegion
     schema_version: str = "1.0"
 
@@ -22,7 +22,7 @@ class SelectionCaptureContext:
     def freeze(
         cls,
         display: DisplaySnapshot,
-        selection: Rectangle,
+        selection: Selection,
         *,
         capture_id: str | None = None,
         captured_at: str | None = None,
@@ -83,12 +83,8 @@ class SelectionCaptureContext:
                 "configuration_id": self.display.configuration_id,
             },
             "selection": {
-                "type": self.selection.type,
                 "coordinate_space": "display_local_dip_top_left",
-                "x": self.selection.x,
-                "y": self.selection.y,
-                "width": self.selection.width,
-                "height": self.selection.height,
+                **self.selection.as_dict(),
             },
             "crop_px": {
                 "coordinate_space": "capture_frame_px_top_left",

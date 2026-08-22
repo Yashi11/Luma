@@ -63,6 +63,7 @@ export default function SelectionPreviewView() {
   const voiceTurnStartingRef = useRef(false);
   const serverSpeechEndedRef = useRef(false);
   const mountedRef = useRef(true);
+  const inputPrewarmedRef = useRef(false);
 
   const speakAnswer = useCallback((answer: string, onEnd?: () => void) => {
     if (!window.speechSynthesis || !answer.trim()) {
@@ -203,18 +204,6 @@ export default function SelectionPreviewView() {
       },
     );
     window.electron.ipcRenderer.sendMessage('selection-preview-ready');
-    const prewarmInput = async () => {
-      const permitted = await window.electron.ipcRenderer.invoke(
-        'selection-voice-permission',
-      );
-      if (!permitted || !mountedRef.current) return;
-      await window.electron.ipcRenderer.invoke('set-wake-word-capture-paused', {
-        paused: true,
-      });
-      wakeWordPausedRef.current = true;
-      await prewarmVoiceRecorder();
-    };
-    prewarmInput().catch(() => undefined);
     const close = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         window.electron.ipcRenderer.sendMessage('selection-cancel');
@@ -237,6 +226,25 @@ export default function SelectionPreviewView() {
       window.removeEventListener('keydown', close);
     };
   }, [speakAnswer, stopSpeech]);
+
+  useEffect(() => {
+    if (!state.imageDataUrl || inputPrewarmedRef.current) {
+      return;
+    }
+    inputPrewarmedRef.current = true;
+    const prewarmInput = async () => {
+      const permitted = await window.electron.ipcRenderer.invoke(
+        'selection-voice-permission',
+      );
+      if (!permitted || !mountedRef.current) return;
+      await window.electron.ipcRenderer.invoke('set-wake-word-capture-paused', {
+        paused: true,
+      });
+      wakeWordPausedRef.current = true;
+      await prewarmVoiceRecorder();
+    };
+    prewarmInput().catch(() => undefined);
+  }, [state.imageDataUrl, state.status]);
 
   const handleVoice = async () => {
     if (mutedRef.current || voiceTurnStartingRef.current) return;
@@ -473,10 +481,21 @@ export default function SelectionPreviewView() {
               ⌖
             </span>
             <div>
-              <strong>Visual Copilot</strong>
-              <span>Live voice · selected pixels only</span>
+              <strong>Coco</strong>
+              <span>Visual Copilot · selected pixels only</span>
             </div>
           </div>
+          <button
+            className="selection-card__close"
+            type="button"
+            aria-label="Close Visual Copilot"
+            title="Close"
+            onClick={() =>
+              window.electron.ipcRenderer.sendMessage('selection-cancel')
+            }
+          >
+            <span aria-hidden>×</span>
+          </button>
         </header>
 
         {state.imageDataUrl && (

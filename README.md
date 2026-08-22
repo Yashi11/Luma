@@ -4,7 +4,7 @@ Point at anything on your Mac and ask about it without changing context.
 
 Visual Copilot reuses the CoCo Electron shell while replacing its default continuous-observation path with an explicit, user-initiated flow:
 
-`hotkey → rectangle selection → exact in-memory crop → preview/question → explain`
+`click Coco or use the hotkey → rectangle/freeform selection → exact in-memory crop → preview/question → explain`
 
 ## V1 privacy contract
 
@@ -14,7 +14,7 @@ The V1 model receives no tools and returns structured `{explanation, uncertainty
 
 ## Architecture
 
-- **CoCo Electron shell:** global shortcut, interactive `SelectionOverlay`, preview/question card, answer card, and trusted main-process IPC.
+- **CoCo Electron shell:** clickable desktop pet, global shortcut, rectangle/freeform `SelectionOverlay`, preview/question card, answer card, and trusted main-process IPC.
 - **Python selection service:** immutable display snapshot, DIP-to-pixel mapping, region-only `mss` capture, PNG verification, hash/provenance, cancellation, and retry lifecycle.
 - **OpenAI Responses API:** base64 PNG input, structured output, `store=False`, and no tools.
 

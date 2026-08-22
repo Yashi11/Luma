@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .context import SelectionCaptureContext
-from .geometry import CropRegion, DisplaySnapshot
+from .geometry import CropRegion, DisplaySnapshot, Freeform
 
 MAX_ENCODED_BYTES = 10 * 1024 * 1024
 MAX_PIXELS = 16_000_000
@@ -181,11 +181,53 @@ def _is_obviously_black(color_type: int, pixels: bytes) -> bool:
     return True
 
 
+def _mask_freeform_pixels(png: bytes, context: SelectionCaptureContext) -> bytes:
+    """Zero every pixel outside a frozen lasso before provenance is attached."""
+    if not isinstance(context.selection, Freeform):
+        return png
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError as exc:
+        raise RuntimeError("freeform capture requires Pillow") from exc
+
+    with Image.open(io.BytesIO(png)) as source:
+        image = source.convert("RGBA")
+    mask = Image.new("L", image.size, 0)
+    points = [
+        (
+            max(
+                0,
+                min(
+                    context.crop.width - 1,
+                    round(point.x * context.display.scale_x - context.crop.x),
+                ),
+            ),
+            max(
+                0,
+                min(
+                    context.crop.height - 1,
+                    round(point.y * context.display.scale_y - context.crop.y),
+                ),
+            ),
+        )
+        for point in context.selection.points
+    ]
+    ImageDraw.Draw(mask).polygon(points, fill=255)
+    selected = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    selected.paste(image, (0, 0), mask)
+    output = io.BytesIO()
+    selected.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
 def _validate_and_bind(png: bytes, context: SelectionCaptureContext) -> CapturedCrop:
     context.validate()
     width, height, color_type, pixels = _decode_png_pixels(png)
     if (width, height) != (context.crop.width, context.crop.height):
         raise ValueError("captured image dimensions do not match the selected crop")
+    if isinstance(context.selection, Freeform):
+        png = _mask_freeform_pixels(png, context)
+        width, height, color_type, pixels = _decode_png_pixels(png)
     if _is_obviously_black(color_type, pixels):
         raise ValueError("capture is empty, black, or protected")
     digest = hashlib.sha256(png).hexdigest()

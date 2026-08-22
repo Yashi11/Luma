@@ -9,7 +9,7 @@ from threading import RLock
 from uuid import uuid4
 
 from .capture import InMemoryRegionCapture, RegionCapture
-from .geometry import DisplaySnapshot, Rectangle
+from .geometry import DisplaySnapshot, Freeform, Point, Rectangle, Selection
 from .privacy import StrictOutboundRequest
 from .provider import Explanation, VisionProvider
 from .session import SelectionSession
@@ -61,7 +61,9 @@ class LocalSelectionService:
         return session_id
 
     def freeze(self, token: str, session_id: str, selection_payload: Mapping[str, object]) -> dict:
-        context = self._session(token, session_id).freeze_geometry(parse_rectangle(selection_payload))
+        context = self._session(token, session_id).freeze_geometry(
+            parse_selection(selection_payload)
+        )
         return context.as_dict()
 
     def overlay_hidden(self, token: str, session_id: str) -> None:
@@ -195,7 +197,7 @@ def parse_display_snapshot(payload: Mapping[str, object]) -> DisplaySnapshot:
 def parse_rectangle(payload: Mapping[str, object]) -> Rectangle:
     expected = {"type", "x", "y", "width", "height"}
     if set(payload) != expected or payload.get("type") != "rectangle":
-        raise ValueError("V1 selection must be an exact rectangle payload")
+        raise ValueError("selection must be an exact rectangle payload")
     try:
         rectangle = Rectangle(
             x=_number(payload["x"], "x"),
@@ -207,6 +209,45 @@ def parse_rectangle(payload: Mapping[str, object]) -> Rectangle:
         raise ValueError("selection payload contains invalid values") from exc
     rectangle.validate()
     return rectangle
+
+
+def parse_freeform(payload: Mapping[str, object]) -> Freeform:
+    expected = {"type", "x", "y", "width", "height", "points"}
+    if set(payload) != expected or payload.get("type") != "freeform":
+        raise ValueError("selection must be an exact freeform payload")
+    raw_points = payload.get("points")
+    if not isinstance(raw_points, list):
+        raise ValueError("freeform points must be a list")
+    try:
+        points = tuple(
+            Point(
+                x=_number(raw_point["x"], "point.x"),
+                y=_number(raw_point["y"], "point.y"),
+            )
+            for raw_point in raw_points
+            if isinstance(raw_point, Mapping) and set(raw_point) == {"x", "y"}
+        )
+        if len(points) != len(raw_points):
+            raise ValueError("freeform points contain unknown or missing fields")
+        freeform = Freeform(
+            x=_number(payload["x"], "x"),
+            y=_number(payload["y"], "y"),
+            width=_number(payload["width"], "width"),
+            height=_number(payload["height"], "height"),
+            points=points,
+        )
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError("selection payload contains invalid values") from exc
+    freeform.validate()
+    return freeform
+
+
+def parse_selection(payload: Mapping[str, object]) -> Selection:
+    if payload.get("type") == "rectangle":
+        return parse_rectangle(payload)
+    if payload.get("type") == "freeform":
+        return parse_freeform(payload)
+    raise ValueError("selection type must be rectangle or freeform")
 
 
 def _number(value: object, field: str) -> float:

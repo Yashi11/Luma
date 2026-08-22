@@ -13,13 +13,24 @@ import { serviceManager } from './services/manager';
 
 /* eslint-disable no-await-in-loop -- startup readiness polling is intentionally sequential */
 
-type Selection = {
+type RectangleSelection = {
   type: 'rectangle';
   x: number;
   y: number;
   width: number;
   height: number;
 };
+
+type FreeformSelection = {
+  type: 'freeform';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  points: Array<{ x: number; y: number }>;
+};
+
+type Selection = RectangleSelection | FreeformSelection;
 
 type PreviewState = {
   imageDataUrl?: string;
@@ -79,6 +90,10 @@ export default class SelectionController {
 
   private previewWindow: BrowserWindow | null = null;
 
+  private previewShouldBeVisible = false;
+
+  private activationInProgress = false;
+
   private previewState: PreviewState = { status: 'preview' };
 
   private sessionId: string | null = null;
@@ -100,6 +115,9 @@ export default class SelectionController {
     private readonly token: string,
     private readonly preloadPath: () => string,
     private readonly resolveHtmlPath: (htmlFileName: string) => string,
+    private readonly onOverlayVisibilityChange: (
+      visible: boolean,
+    ) => void = () => undefined,
   ) {
     this.api = axios.create({
       baseURL: `http://127.0.0.1:${port}`,
@@ -144,16 +162,22 @@ export default class SelectionController {
   }
 
   async activate(): Promise<void> {
-    await this.cancel();
-    const cursor = screen.getCursorScreenPoint();
-    const display = screen.getDisplayNearestPoint(cursor);
-    this.activeDisplayId = display.id;
-    log.info(
-      `[Visual Copilot] Active Electron display id=${display.id} ` +
-        `bounds=${JSON.stringify(display.bounds)} scale=${display.scaleFactor} ` +
-        `cursor=${JSON.stringify(cursor)}`,
-    );
+    if (this.activationInProgress) {
+      log.info('[Visual Copilot] Ignoring duplicate activation');
+      return;
+    }
+    this.activationInProgress = true;
     try {
+      await this.cancel();
+      this.previewState = { status: 'preview' };
+      const cursor = screen.getCursorScreenPoint();
+      const display = screen.getDisplayNearestPoint(cursor);
+      this.activeDisplayId = display.id;
+      log.info(
+        `[Visual Copilot] Active Electron display id=${display.id} ` +
+          `bounds=${JSON.stringify(display.bounds)} scale=${display.scaleFactor} ` +
+          `cursor=${JSON.stringify(cursor)}`,
+      );
       await this.waitUntilReady();
       const response = await this.api.post('/activate', {
         display: displayPayload(display),
@@ -162,7 +186,33 @@ export default class SelectionController {
       this.createOverlay(display);
     } catch (error) {
       this.showError(SelectionController.messageFor(error));
+    } finally {
+      this.activationInProgress = false;
     }
+  }
+
+  showPreviewIfAvailable(): boolean {
+    const hasCapturedSession = Boolean(
+      this.sessionId && this.previewState.imageDataUrl,
+    );
+    const hasPendingError = this.previewState.status === 'error';
+    if (!hasCapturedSession && !hasPendingError) return false;
+
+    const display =
+      screen
+        .getAllDisplays()
+        .find((item) => item.id === this.activeDisplayId) ??
+      screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    this.previewShouldBeVisible = true;
+    if (!this.previewWindow) this.createPreview(display, true);
+    else {
+      this.publishPreview();
+      if (!this.previewWindow.webContents.isLoadingMainFrame()) {
+        this.previewWindow.show();
+        this.previewWindow.focus();
+      }
+    }
+    return true;
   }
 
   private async waitUntilReady(): Promise<void> {
@@ -207,17 +257,20 @@ export default class SelectionController {
         log.error('[Visual Copilot] overlay load failed', error),
       );
     this.overlayWindow.once('ready-to-show', () => {
+      this.onOverlayVisibilityChange(true);
       this.overlayWindow?.show();
       this.overlayWindow?.focus();
     });
     this.overlayWindow.on('closed', () => {
       this.overlayWindow = null;
+      this.onOverlayVisibilityChange(false);
     });
   }
 
-  private createPreview(display: Display): void {
+  private createPreview(display: Display, showWhenReady = true): void {
     const width = 430;
     const height = Math.min(650, display.workArea.height - 32);
+    this.previewShouldBeVisible = showWhenReady;
     this.previewWindow = new BrowserWindow({
       show: false,
       width,
@@ -234,6 +287,7 @@ export default class SelectionController {
       webPreferences: {
         preload: this.preloadPath(),
         partition: 'visual-copilot-selection',
+        backgroundThrottling: false,
       },
     });
     const previewSession = this.previewWindow.webContents.session;
@@ -268,11 +322,14 @@ export default class SelectionController {
         log.error('[Visual Copilot] preview load failed', error),
       );
     this.previewWindow.once('ready-to-show', () => {
-      this.previewWindow?.show();
-      this.previewWindow?.focus();
+      if (this.previewShouldBeVisible) {
+        this.previewWindow?.show();
+        this.previewWindow?.focus();
+      }
     });
     this.previewWindow.on('closed', () => {
       this.previewWindow = null;
+      this.previewShouldBeVisible = false;
     });
   }
 
@@ -401,7 +458,10 @@ export default class SelectionController {
         imageDataUrl: capture.data.image_data_url,
       };
       this.overlayWindow?.destroy();
-      this.createPreview(display);
+      this.createPreview(display, false);
+      log.info(
+        '[Visual Copilot] Capture ready; voice process started with panel hidden',
+      );
     } catch (error) {
       this.overlayWindow?.destroy();
       this.showError(SelectionController.messageFor(error));
@@ -641,12 +701,8 @@ export default class SelectionController {
 
   private showError(message: string): void {
     log.error(`[Visual Copilot] ${message}`);
-    const display = screen.getDisplayNearestPoint(
-      screen.getCursorScreenPoint(),
-    );
     this.previewState = { status: 'error', error: message };
-    if (!this.previewWindow) this.createPreview(display);
-    else this.publishPreview();
+    if (this.previewWindow) this.publishPreview();
   }
 
   private static messageFor(error: unknown): string {
@@ -675,6 +731,8 @@ export default class SelectionController {
     this.closeNudgeSocket();
     const { sessionId } = this;
     this.sessionId = null;
+    this.previewState = { status: 'preview' };
+    this.previewShouldBeVisible = false;
     if (sessionId) {
       await this.api
         .post(`/sessions/${sessionId}/cancel`)

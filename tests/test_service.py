@@ -2,9 +2,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
+import io
 import unittest
 
 from helpers import make_png
+from PIL import Image
 
 from visual_copilot.capture import InMemoryRegionCapture
 from visual_copilot.geometry import DisplaySnapshot
@@ -87,6 +89,49 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown"):
             self.service.activate(self.token, payload)
 
+    def test_freeform_capture_masks_pixels_outside_the_lasso(self):
+        selection = {
+            "type": "freeform",
+            "x": 10,
+            "y": 10,
+            "width": 40,
+            "height": 40,
+            "points": [
+                {"x": 10, "y": 10},
+                {"x": 50, "y": 10},
+                {"x": 30, "y": 50},
+            ],
+        }
+        session_id = self.service.activate(self.token, self.display_payload)
+        frozen = self.service.freeze(self.token, session_id, selection)
+        self.assertEqual(frozen["selection"]["type"], "freeform")
+        self.service.overlay_hidden(self.token, session_id)
+
+        preview_png = self.service.capture(self.token, session_id)
+        image = Image.open(io.BytesIO(preview_png)).convert("RGBA")
+        self.assertEqual(image.getpixel((1, 38)), (0, 0, 0, 0))
+        self.assertEqual(image.getpixel((20, 10)), (20, 40, 60, 255))
+
+    def test_freeform_payload_rejects_unknown_point_fields(self):
+        session_id = self.service.activate(self.token, self.display_payload)
+        with self.assertRaisesRegex(ValueError, "invalid values"):
+            self.service.freeze(
+                self.token,
+                session_id,
+                {
+                    "type": "freeform",
+                    "x": 10,
+                    "y": 10,
+                    "width": 40,
+                    "height": 40,
+                    "points": [
+                        {"x": 10, "y": 10, "label": "secret"},
+                        {"x": 50, "y": 10},
+                        {"x": 30, "y": 50},
+                    ],
+                },
+            )
+
     def test_provider_failure_keeps_same_crop_for_explicit_retry(self):
         provider = FlakyProvider()
         service = LocalSelectionService(
@@ -108,4 +153,5 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result.explanation, "Retry succeeded.")
 
 
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()
