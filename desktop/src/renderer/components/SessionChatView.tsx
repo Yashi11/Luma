@@ -253,86 +253,102 @@ function formatMetricLatency(ms?: number): string {
 }
 
 // ── Styles (inline so the view is self-contained in a transparent window) ──────
-// Palette mirrors the onboarding panel: SALT Lab blue with a light-blue accent.
-const ACCENT = '#204A79'; // primary blue
-const ACCENT_BG = '#E9EFFF'; // light blue fill
-const ACCENT_BORDER = '#BCD0FC'; // light blue border
-const BORDER = '#e5e7eb';
-const FONT = "'PT Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+// Values resolve from styles/tokens.css so chat follows the same light/dark
+// appearance as the other Electron surfaces.
+const ACCENT = 'var(--vc-accent-strong)';
+const ACCENT_BG = 'var(--vc-accent-softer)';
+const ACCENT_BORDER = 'var(--vc-accent-border)';
+const BORDER = 'var(--vc-hairline)';
+const FONT = 'var(--vc-font)';
+const SURFACE = 'var(--vc-surface-solid)';
+const SURFACE_INPUT = 'var(--vc-surface-input)';
+const INK = 'var(--vc-ink)';
+const INK_2 = 'var(--vc-ink-2)';
+const MUTED = 'var(--vc-muted)';
+const FAINT = 'var(--vc-faint)';
+const FILL = 'var(--vc-fill)';
+const GREEN = 'var(--vc-green-ink)';
+const AMBER = 'var(--vc-amber-ink)';
+const RED = 'var(--vc-red-ink)';
+const RED_BG = 'var(--vc-red-soft)';
+const RED_BORDER = 'var(--vc-red-border)';
+const ON_ACCENT = 'var(--vc-on-accent)';
+const ACCENT_GRADIENT =
+  'linear-gradient(180deg, #6d6de0, var(--vc-accent))';
 const S: Record<string, React.CSSProperties> = {
   root: {
     display: 'flex', flexDirection: 'column', height: '100vh',
     fontFamily: FONT,
-    background: '#ffffff', borderRadius: 14, overflow: 'hidden',
-    boxShadow: '0 8px 32px rgba(0,0,0,0.18)', border: `1px solid ${BORDER}`,
-    color: '#111827',
+    background: SURFACE, borderRadius: 18, overflow: 'hidden',
+    boxShadow: 'var(--vc-shadow-3)', border: `1px solid ${BORDER}`,
+    color: INK,
   },
   contentViewport: { flex: 1, minHeight: 0, width: '100%', overflow: 'hidden' },
   scalableContent: { display: 'flex', flexDirection: 'column', minHeight: 0, transformOrigin: 'top left' },
   header: {
     display: 'flex', alignItems: 'center', gap: 8, padding: '9px 10px',
-    background: '#f9fafb', borderBottom: `1px solid ${BORDER}`,
+    background: FILL, borderBottom: `1px solid ${BORDER}`,
     WebkitAppRegion: 'drag', // draggable region for the frameless window
   } as React.CSSProperties,
-  brand: { display: 'flex', alignItems: 'center', gap: 7, flex: '1 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', fontWeight: 700, fontSize: 13, color: '#374151' },
+  brand: { display: 'flex', alignItems: 'center', gap: 7, flex: '1 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', fontWeight: 700, fontSize: 13, color: INK_2 },
   statusDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0 },
-  sub: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, color: '#9ca3af', fontWeight: 400 },
+  sub: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 11, color: FAINT, fontWeight: 400 },
   healthHeaderButton: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', fontFamily: FONT, fontSize: 11, lineHeight: 1.2, fontWeight: 700, whiteSpace: 'nowrap', WebkitAppRegion: 'no-drag' } as React.CSSProperties,
   headerBtns: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, WebkitAppRegion: 'no-drag' } as React.CSSProperties,
   modelSelect: {
     width: 120, minWidth: 120, maxWidth: 120,
-    border: `1px solid ${ACCENT_BORDER}`, background: '#fff',
+    border: `1px solid ${ACCENT_BORDER}`, background: SURFACE_INPUT,
     color: ACCENT, borderRadius: 7, padding: '3px 6px', fontSize: 11,
     fontFamily: FONT, WebkitAppRegion: 'no-drag',
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   } as React.CSSProperties,
   iconBtn: {
     border: 'none', background: 'transparent', cursor: 'pointer',
-    fontSize: 15, color: '#9ca3af', padding: '3px 5px', borderRadius: 7,
+    fontSize: 15, color: FAINT, padding: '3px 5px', borderRadius: 7,
   },
   iconBtnActive: { background: ACCENT_BG, color: ACCENT },
   newSessionBtn: {
-    border: `1px solid ${ACCENT_BORDER}`, background: '#fff', cursor: 'pointer',
+    border: `1px solid ${ACCENT_BORDER}`, background: SURFACE_INPUT, cursor: 'pointer',
     fontSize: 11.5, color: ACCENT, padding: '3px 8px', borderRadius: 7,
     fontFamily: FONT, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
   },
-  historyPanel: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: '#fff' },
+  historyPanel: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: SURFACE },
   historyPanelHeader: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', borderBottom: `1px solid ${BORDER}` },
-  historyTitle: { fontSize: 14, fontWeight: 700, color: '#374151' },
+  historyTitle: { fontSize: 14, fontWeight: 700, color: INK_2 },
   historyBack: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 700, fontFamily: FONT },
   historyList: { flex: 1, overflowY: 'auto', padding: '8px 10px 12px', display: 'flex', flexDirection: 'column', gap: 6 },
-  historyItem: { width: '100%', border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 10, padding: '9px 10px', textAlign: 'left', cursor: 'pointer', fontFamily: FONT },
-  historyItemTitle: { display: 'block', color: '#374151', fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  historyItemMeta: { display: 'block', color: '#9ca3af', fontSize: 10.5, marginTop: 2 },
-  historyItemPreview: { display: 'block', color: '#6b7280', fontSize: 11.5, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  historyItem: { width: '100%', border: `1px solid ${BORDER}`, background: SURFACE_INPUT, borderRadius: 10, padding: '9px 10px', textAlign: 'left', cursor: 'pointer', fontFamily: FONT },
+  historyItemTitle: { display: 'block', color: INK_2, fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  historyItemMeta: { display: 'block', color: FAINT, fontSize: 10.5, marginTop: 2 },
+  historyItemPreview: { display: 'block', color: MUTED, fontSize: 11.5, marginTop: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   reviewBanner: { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: ACCENT_BG, borderBottom: `1px solid ${ACCENT_BORDER}`, color: ACCENT, fontSize: 11.5 },
-  problem: { padding: '6px 14px', fontSize: 11, color: '#9ca3af', borderBottom: `1px solid #f3f4f6`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  problem: { padding: '6px 14px', fontSize: 11, color: FAINT, borderBottom: `1px solid ${BORDER}`, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   list: { flex: 1, overflowY: 'auto', padding: 14, display: 'flex', flexDirection: 'column', gap: 12 },
   userRow: { alignSelf: 'flex-end', maxWidth: '85%' },
   tutorRow: { alignSelf: 'flex-start', maxWidth: '92%', display: 'flex', gap: 8 },
-  tutorAvatar: { width: 24, height: 24, borderRadius: '50%', background: ACCENT, color: '#fff', fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 },
-  userBubble: { background: ACCENT, color: '#fff', padding: '9px 13px', borderRadius: '16px 16px 4px 16px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
-  tutorBubble: { background: '#f3f4f6', color: '#374151', padding: '9px 13px', borderRadius: '4px 16px 16px 16px', fontSize: 13, lineHeight: 1.5 },
-  errBubble: { background: '#fef2f2', color: '#b91c1c', padding: '9px 13px', borderRadius: 12, fontSize: 13, border: '1px solid #fecaca' },
-  retryBtn: { marginTop: 7, border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', borderRadius: 8, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
+  tutorAvatar: { width: 24, height: 24, borderRadius: '50%', background: ACCENT, color: ON_ACCENT, fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 },
+  userBubble: { background: ACCENT_GRADIENT, color: ON_ACCENT, padding: '9px 13px', borderRadius: '16px 16px 4px 16px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  tutorBubble: { background: FILL, color: INK_2, padding: '9px 13px', borderRadius: '4px 16px 16px 16px', fontSize: 13, lineHeight: 1.5 },
+  errBubble: { background: RED_BG, color: RED, padding: '9px 13px', borderRadius: 12, fontSize: 13, border: `1px solid ${RED_BORDER}` },
+  retryBtn: { marginTop: 7, border: `1px solid ${RED_BORDER}`, background: SURFACE_INPUT, color: RED, borderRadius: 8, padding: '4px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
   thumbRow: { display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   thumb: { width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: `1px solid ${BORDER}` },
   example: { marginTop: 8, background: ACCENT_BG, border: `1px solid ${ACCENT_BORDER}`, borderRadius: 10, padding: '8px 10px', fontSize: 12, color: ACCENT },
-  exampleBtn: { marginTop: 6, border: `1px solid ${ACCENT_BORDER}`, background: '#fff', borderRadius: 8, padding: '3px 9px', fontSize: 11, cursor: 'pointer', color: ACCENT },
-  viz: { marginTop: 8, width: '100%', height: 280, border: `1px solid ${BORDER}`, borderRadius: 10, background: '#fff' },
-  composer: { borderTop: `1px solid ${BORDER}`, padding: 10, background: '#fff' },
+  exampleBtn: { marginTop: 6, border: `1px solid ${ACCENT_BORDER}`, background: SURFACE_INPUT, borderRadius: 8, padding: '3px 9px', fontSize: 11, cursor: 'pointer', color: ACCENT },
+  viz: { marginTop: 8, width: '100%', height: 280, border: `1px solid ${BORDER}`, borderRadius: 10, background: SURFACE },
+  composer: { borderTop: `1px solid ${BORDER}`, padding: 10, background: SURFACE },
   composerModelRow: { display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7 },
-  composerModelLabel: { color: '#6b7280', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' },
+  composerModelLabel: { color: MUTED, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' },
   pendingContext: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '6px 8px', border: `1px solid ${ACCENT_BORDER}`, borderRadius: 8, background: ACCENT_BG, color: ACCENT, fontSize: 11.5 },
   pendingContextText: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   pendingContextX: { border: 'none', background: 'transparent', color: ACCENT, cursor: 'pointer', padding: '0 2px', fontFamily: FONT, fontSize: 14, lineHeight: 1 },
   pending: { display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 },
   pendingThumbWrap: { position: 'relative' },
   imagePreviewButton: { display: 'block', border: 'none', borderRadius: 8, padding: 0, background: 'transparent', cursor: 'zoom-in' },
-  pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#374151', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
+  pendingX: { position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: INK_2, color: ON_ACCENT, border: 'none', cursor: 'pointer', fontSize: 10, lineHeight: '16px', padding: 0 },
   inputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
-  textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, outline: 'none', color: '#111827' },
-  sendBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT },
+  textarea: { flex: 1, resize: 'none', border: `1px solid ${BORDER}`, borderRadius: 12, padding: '9px 11px', fontSize: 13, fontFamily: FONT, maxHeight: 120, color: INK, background: SURFACE_INPUT },
+  sendBtn: { border: 'none', background: ACCENT_GRADIENT, color: ON_ACCENT, borderRadius: 12, padding: '9px 15px', fontSize: 13, cursor: 'pointer', fontWeight: 700, fontFamily: FONT, boxShadow: 'var(--vc-shadow-accent)' },
   micBtn: {
     width: 38,
     height: 38,
@@ -341,74 +357,74 @@ const S: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     border: 'none',
-    background: '#fff',
-    color: '#374151',
+    background: SURFACE_INPUT,
+    color: INK_2,
     borderRadius: '50%',
     padding: 0,
     cursor: 'pointer',
     fontFamily: FONT,
-    boxShadow: '0 0 0 1px rgba(15, 23, 42, 0.14), 0 1px 3px rgba(15, 23, 42, 0.12)',
+    boxShadow: 'var(--vc-shadow-1)',
   },
   micBtnActive: {
-    background: '#dc2626',
-    color: '#fff',
-    boxShadow: '0 0 0 4px #fff, 0 0 0 5px rgba(220, 38, 38, 0.2)',
+    background: 'var(--vc-red)',
+    color: ON_ACCENT,
+    boxShadow: `0 0 0 4px ${SURFACE}, 0 0 0 5px ${RED_BORDER}`,
   },
-  voiceHint: { marginTop: 6, fontSize: 11, color: '#6b7280', fontFamily: FONT, textAlign: 'center' },
-  voiceError: { marginTop: 6, fontSize: 11, color: '#b91c1c', fontFamily: FONT, textAlign: 'center' },
+  voiceHint: { marginTop: 6, fontSize: 11, color: MUTED, fontFamily: FONT, textAlign: 'center' },
+  voiceError: { marginTop: 6, fontSize: 11, color: RED, fontFamily: FONT, textAlign: 'center' },
   sendBtnDisabled: { opacity: 0.4, cursor: 'default' },
-  hotkeyHint: { marginTop: 6, fontSize: 11, color: '#9ca3af', fontFamily: FONT, textAlign: 'center' },
-  hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: '#6b7280', background: '#f3f4f6', border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
+  hotkeyHint: { marginTop: 6, fontSize: 11, color: FAINT, fontFamily: FONT, textAlign: 'center' },
+  hotkeyKbd: { fontFamily: FONT, fontWeight: 600, color: MUTED, background: FILL, border: `1px solid ${BORDER}`, borderRadius: 5, padding: '1px 5px', fontSize: 10.5 },
   feedbackRow: { display: 'flex', gap: 2, marginTop: 4 },
   userMessageActions: { display: 'flex', justifyContent: 'flex-end', marginTop: 3 },
-  copyMessageBtn: { border: 'none', background: 'transparent', borderRadius: 6, padding: '1px 5px', color: '#9ca3af', fontFamily: FONT, fontSize: 10.5, lineHeight: '18px', cursor: 'pointer' },
-  copyMessageBtnDone: { color: '#16a34a', fontWeight: 700 },
-  metricRow: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, color: '#6b7280', fontSize: 10.5 },
-  metricChip: { border: `1px solid ${BORDER}`, background: '#fff', borderRadius: 6, padding: '1px 5px', lineHeight: 1.35 },
+  copyMessageBtn: { border: 'none', background: 'transparent', borderRadius: 6, padding: '1px 5px', color: FAINT, fontFamily: FONT, fontSize: 10.5, lineHeight: '18px', cursor: 'pointer' },
+  copyMessageBtnDone: { color: GREEN, fontWeight: 700 },
+  metricRow: { display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 5, color: MUTED, fontSize: 10.5 },
+  metricChip: { border: `1px solid ${BORDER}`, background: SURFACE_INPUT, borderRadius: 6, padding: '1px 5px', lineHeight: 1.35 },
   toolStack: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 7 },
-  toolCard: { border: `1px solid ${ACCENT_BORDER}`, background: '#f8faff', borderRadius: 10, padding: '7px 9px', color: '#4b5563', fontSize: 11.5, lineHeight: 1.4 },
+  toolCard: { border: `1px solid ${ACCENT_BORDER}`, background: ACCENT_BG, borderRadius: 10, padding: '7px 9px', color: INK_2, fontSize: 11.5, lineHeight: 1.4 },
   toolHeader: { display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: ACCENT },
   toolIcon: { width: 18, height: 18, borderRadius: 5, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: ACCENT_BG, fontSize: 11 },
-  toolStatus: { marginLeft: 'auto', color: '#16a34a', fontWeight: 600, fontSize: 10.5 },
-  toolStatusError: { color: '#b91c1c' },
-  toolArgs: { marginTop: 3, color: '#6b7280' },
+  toolStatus: { marginLeft: 'auto', color: GREEN, fontWeight: 600, fontSize: 10.5 },
+  toolStatusError: { color: RED },
+  toolArgs: { marginTop: 3, color: MUTED },
   toolDetails: { marginTop: 5 },
   toolObservation: { borderTop: `1px solid ${BORDER}`, marginTop: 5, paddingTop: 5 },
   feedbackBtn: { border: '1px solid transparent', background: 'transparent', borderRadius: 6, padding: '0 5px', fontSize: 12, lineHeight: '20px', cursor: 'pointer', opacity: 0.45 },
   feedbackBtnRated: { opacity: 1, background: ACCENT_BG, borderColor: ACCENT_BORDER, cursor: 'default' },
-  typing: { alignSelf: 'flex-start', color: '#9ca3af', fontSize: 12, fontStyle: 'italic', paddingLeft: 32 },
-  empty: { margin: 'auto', textAlign: 'center', color: '#9ca3af', fontSize: 12.5, lineHeight: 1.6, padding: 24 },
+  typing: { alignSelf: 'flex-start', color: FAINT, fontSize: 12, fontStyle: 'italic', paddingLeft: 32 },
+  empty: { margin: 'auto', textAlign: 'center', color: FAINT, fontSize: 12.5, lineHeight: 1.6, padding: 24 },
   // Settings panel (mirrors the onboarding toolkit step)
-  settings: { borderBottom: `1px solid ${BORDER}`, background: '#ffffff', padding: '14px', maxHeight: 360, overflowY: 'auto' },
+  settings: { borderBottom: `1px solid ${BORDER}`, background: SURFACE, padding: '14px', maxHeight: 360, overflowY: 'auto' },
   healthList: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 },
   healthRow: { display: 'flex', alignItems: 'flex-start', gap: 8, border: `1px solid ${BORDER}`, borderRadius: 8, padding: '8px 10px' },
   healthDot: { width: 8, height: 8, borderRadius: '50%', flexShrink: 0, marginTop: 4 },
-  healthName: { fontSize: 12.5, fontWeight: 700, color: '#374151' },
-  healthDetail: { fontSize: 10.5, color: '#9ca3af', marginTop: 2 },
+  healthName: { fontSize: 12.5, fontWeight: 700, color: INK_2 },
+  healthDetail: { fontSize: 10.5, color: FAINT, marginTop: 2 },
   healthActions: { display: 'flex', alignItems: 'center', gap: 9, marginBottom: 14 },
   connectionTestRow: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
-  connectionTestButton: { border: `1px solid ${ACCENT_BORDER}`, background: '#fff', color: ACCENT, borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
-  connectionTestSuccess: { color: '#16a34a', fontSize: 11.5, fontWeight: 700 },
-  connectionTestError: { width: '100%', color: '#b91c1c', fontSize: 11.5 },
-  connectionTestErrorText: { maxHeight: 140, overflow: 'auto', margin: '6px 0 0', padding: 8, borderRadius: 7, background: '#fef2f2', whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', fontSize: 10.5 },
+  connectionTestButton: { border: `1px solid ${ACCENT_BORDER}`, background: SURFACE_INPUT, color: ACCENT, borderRadius: 8, padding: '5px 10px', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
+  connectionTestSuccess: { color: GREEN, fontSize: 11.5, fontWeight: 700 },
+  connectionTestError: { width: '100%', color: RED, fontSize: 11.5 },
+  connectionTestErrorText: { maxHeight: 140, overflow: 'auto', margin: '6px 0 0', padding: 8, borderRadius: 7, background: RED_BG, border: `1px solid ${RED_BORDER}`, color: RED, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'var(--vc-font-mono)', fontSize: 10.5 },
   toggleRow: { display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer', marginBottom: 14 },
-  toggleTitle: { display: 'block', fontSize: 13, color: '#374151', marginBottom: 2 },
-  toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: '#9ca3af' },
+  toggleTitle: { display: 'block', fontSize: 13, color: INK_2, marginBottom: 2 },
+  toggleHelp: { display: 'block', fontSize: 11.5, lineHeight: 1.4, color: FAINT },
   groupLabel: { fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: ACCENT, marginBottom: 6 },
   chips: { display: 'flex', flexWrap: 'wrap', gap: 7, marginBottom: 14 },
-  chip: { fontSize: 13, fontWeight: 500, padding: '6px 14px', borderRadius: 999, background: '#fff', border: '1.5px solid #d1d5db', color: '#4b5563', cursor: 'pointer', fontFamily: FONT },
-  chipOn: { background: ACCENT, borderColor: ACCENT, color: '#fff' },
-  chipDashed: { borderStyle: 'dashed', color: '#9ca3af' },
-  chipEmpty: { fontSize: 12, color: '#9ca3af', fontStyle: 'italic' },
+  chip: { fontSize: 13, fontWeight: 500, padding: '6px 14px', borderRadius: 999, background: SURFACE_INPUT, border: `1.5px solid ${BORDER}`, color: INK_2, cursor: 'pointer', fontFamily: FONT },
+  chipOn: { background: ACCENT, borderColor: ACCENT, color: ON_ACCENT },
+  chipDashed: { borderStyle: 'dashed', color: FAINT },
+  chipEmpty: { fontSize: 12, color: FAINT, fontStyle: 'italic' },
   customForm: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: -6, marginBottom: 14 },
-  customInput: { width: '100%', border: '1.5px solid #d1d5db', borderRadius: 8, padding: '7px 11px', fontSize: 13, color: '#374151', outline: 'none', fontFamily: FONT, boxSizing: 'border-box' },
-  memoryArea: { width: '100%', minHeight: 96, resize: 'vertical', border: '1.5px solid #d1d5db', borderRadius: 8, padding: '8px 11px', fontSize: 13, lineHeight: 1.5, color: '#374151', outline: 'none', fontFamily: FONT, boxSizing: 'border-box', marginBottom: 8 },
-  sectionDivider: { height: 1, background: '#f3f4f6', margin: '4px 0 14px' },
-  helpText: { fontSize: 11.5, color: '#9ca3af', lineHeight: 1.5, marginBottom: 8 },
-  addBtn: { alignSelf: 'flex-start', border: 'none', background: ACCENT, color: '#fff', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
+  customInput: { width: '100%', border: `1.5px solid ${BORDER}`, borderRadius: 8, padding: '7px 11px', fontSize: 13, color: INK_2, background: SURFACE_INPUT, fontFamily: FONT, boxSizing: 'border-box' },
+  memoryArea: { width: '100%', minHeight: 96, resize: 'vertical', border: `1.5px solid ${BORDER}`, borderRadius: 8, padding: '8px 11px', fontSize: 13, lineHeight: 1.5, color: INK_2, background: SURFACE_INPUT, fontFamily: FONT, boxSizing: 'border-box', marginBottom: 8 },
+  sectionDivider: { height: 1, background: BORDER, margin: '4px 0 14px' },
+  helpText: { fontSize: 11.5, color: FAINT, lineHeight: 1.5, marginBottom: 8 },
+  addBtn: { alignSelf: 'flex-start', border: 'none', background: ACCENT, color: ON_ACCENT, borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
   saveRow: { display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 },
-  saveBtn: { border: 'none', background: ACCENT, color: '#fff', borderRadius: 999, padding: '7px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
-  saved: { fontSize: 12, color: '#16a34a', fontWeight: 700 },
+  saveBtn: { border: 'none', background: ACCENT, color: ON_ACCENT, borderRadius: 999, padding: '7px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: FONT },
+  saved: { fontSize: 12, color: GREEN, fontWeight: 700 },
 };
 
 const CHATBOTS = Object.values(AI_TOOLS).filter((t) => t.category === 'chatbot');
@@ -439,7 +455,7 @@ function TutorMessage({ text }: { text: string }) {
       )}
       {g.examplePrompt && (
         <div style={S.example}>
-          <div style={{ fontWeight: 600, marginBottom: 2, color: '#3355cc' }}>Try this prompt</div>
+          <div style={{ fontWeight: 600, marginBottom: 2, color: ACCENT }}>Try this prompt</div>
           {g.examplePrompt}
           <div>
             <button
@@ -533,7 +549,7 @@ export function ToolCallCard({ call }: { call: TutorToolCall }) {
           {results.map((result, index) => (
             <div key={result.id ?? `${call.id}-${index}`} style={S.toolObservation}>
               {result.updated_at && (
-                <div style={{ color: '#9ca3af', fontSize: 10.5 }}>
+                <div style={{ color: FAINT, fontSize: 10.5 }}>
                   {new Date(result.updated_at).toLocaleString()}
                 </div>
               )}
@@ -541,7 +557,7 @@ export function ToolCallCard({ call }: { call: TutorToolCall }) {
               {result.evidence?.map((observation, evidenceIndex) => (
                 <div
                   key={observation.id ?? `${call.id}-${index}-${evidenceIndex}`}
-                  style={{ color: '#6b7280', marginTop: 4 }}
+                  style={{ color: MUTED, marginTop: 4 }}
                 >
                   Evidence: {observation.content}
                 </div>
@@ -1787,15 +1803,15 @@ export default function SessionChatView() {
             : healthLoading
               ? 'Checking health…'
               : 'Health unknown';
-  const chatHealthColor = cocoSleeping
-    ? '#6b7280'
+  const chatHealthTone = cocoSleeping
+    ? 'muted'
     : serviceUnavailable || modelUnavailable
-      ? '#dc2626'
+      ? 'danger'
       : modelConfigurationIssue
-        ? '#b45309'
+        ? 'warning'
         : modelsVerified
-          ? '#16a34a'
-          : '#6b7280';
+          ? 'success'
+          : 'muted';
   const chatHealthTitle = cocoSleeping
     ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
     : serviceUnavailable
@@ -1827,23 +1843,25 @@ export default function SessionChatView() {
     (serviceUnavailable || modelUnavailable || modelConfigurationIssue);
 
   return (
-    <div style={S.root}>
+    <div className="session-chat-root" style={S.root}>
       <div
         role="banner"
         style={S.header}
       >
         <span style={S.brand}>
           <span
+            className={`session-chat-health-dot session-chat-health-dot--${chatHealthTone}`}
             role="status"
             aria-label={chatHealthLabel}
-            style={{ ...S.statusDot, background: chatHealthColor }}
+            style={S.statusDot}
             title={chatHealthTitle}
           />
           Coco
           {hasChatHealthIssue ? (
             <button
               type="button"
-              style={{ ...S.healthHeaderButton, color: chatHealthColor }}
+              className={`session-chat-health session-chat-health--${chatHealthTone}`}
+              style={S.healthHeaderButton}
               title={chatHealthTitle}
               aria-label={`${chatHealthLabel}. Open Settings`}
               onClick={() => {
@@ -1981,11 +1999,11 @@ export default function SessionChatView() {
                       ...S.healthDot,
                       background: health
                         ? (hasHealthIssue
-                          ? '#ef4444'
+                          ? 'var(--vc-red)'
                           : isFullyConnected
-                            ? '#22c55e'
-                            : '#f59e0b')
-                        : '#d1d5db',
+                            ? 'var(--vc-green)'
+                            : 'var(--vc-amber)')
+                        : BORDER,
                     }}
                   />
                   <div style={{ flex: 1 }}>
@@ -1993,11 +2011,11 @@ export default function SessionChatView() {
                     <div style={{
                       ...S.healthDetail,
                       color: hasHealthIssue
-                        ? '#dc2626'
+                        ? RED
                         : isFullyConnected
-                          ? '#16a34a'
+                          ? GREEN
                           : health
-                            ? '#b45309'
+                            ? AMBER
                             : undefined,
                     }}>
                       {details.join(' · ')}
@@ -2026,7 +2044,7 @@ export default function SessionChatView() {
             </div>
           )}
           {!cocoSleeping && healthError && (
-            <div style={{ color: '#b91c1c', fontSize: 11.5, marginBottom: 12 }}>
+            <div style={{ color: RED, fontSize: 11.5, marginBottom: 12 }}>
               Health check failed: {healthError}
             </div>
           )}
@@ -2070,8 +2088,8 @@ export default function SessionChatView() {
                 marginTop: 6,
                 color:
                   wakeWordCaptureError || wakeWordStatus === 'error'
-                    ? '#b91c1c'
-                    : '#16a34a',
+                    ? RED
+                    : GREEN,
               }}
             >
               {wakeWordCaptureError
@@ -2095,7 +2113,7 @@ export default function SessionChatView() {
             <div style={{ ...S.helpText, marginTop: 8 }}>Loading model settings…</div>
           )}
           {modelLoadError && (
-            <div style={{ color: '#b45309', fontSize: 11.5, margin: '8px 0' }}>
+            <div style={{ color: AMBER, fontSize: 11.5, margin: '8px 0' }}>
               {modelLoadError}
             </div>
           )}
@@ -2262,7 +2280,7 @@ export default function SessionChatView() {
                     {tutorModels.length > 1 && (
                       <button
                         type="button"
-                        style={{ border: 'none', background: 'none', color: '#b91c1c', cursor: 'pointer' }}
+                        style={{ border: 'none', background: 'none', color: RED, cursor: 'pointer' }}
                         onClick={() => {
                           const next = tutorModels.filter((item) => item.id !== model.id);
                           setTutorModels(next);
@@ -2331,7 +2349,7 @@ export default function SessionChatView() {
                 {modelSavedFlash && <span style={S.saved}>✓ Saved</span>}
               </div>
               {modelSaveError && (
-                <div style={{ color: '#b91c1c', fontSize: 11.5, marginBottom: 12 }}>
+                <div style={{ color: RED, fontSize: 11.5, marginBottom: 12 }}>
                   {modelSaveError}
                 </div>
               )}
@@ -2359,7 +2377,7 @@ export default function SessionChatView() {
             <div style={{ ...S.helpText, marginTop: -8 }}>Applying…</div>
           )}
           {avatarSaveError && (
-            <div style={{ color: '#b91c1c', fontSize: 11.5, margin: '-8px 0 12px' }}>
+            <div style={{ color: RED, fontSize: 11.5, margin: '-8px 0 12px' }}>
               {avatarSaveError}
             </div>
           )}

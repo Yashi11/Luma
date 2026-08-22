@@ -320,7 +320,7 @@ describe('deferred suggestion context', () => {
     const warning = await screen.findByRole('button', {
       name: 'Configure models. Open Settings',
     });
-    expect(warning).toHaveStyle({ color: '#b45309' });
+    expect(warning).toHaveClass('session-chat-health--warning');
 
     fireEvent.click(warning);
     expect(screen.getByText('Models & providers')).toBeInTheDocument();
@@ -366,7 +366,7 @@ describe('deferred suggestion context', () => {
     const warning = await screen.findByRole('button', {
       name: 'Model issue. Open Settings',
     });
-    expect(warning).toHaveStyle({ color: '#dc2626' });
+    expect(warning).toHaveClass('session-chat-health--danger');
     expect(warning).toHaveAttribute(
       'title',
       expect.stringContaining('The API key was rejected.'),

@@ -1,3 +1,5 @@
+@import '../styles/tokens.css';
+
 html,
 body,
 #root {
@@ -17,12 +19,8 @@ body,
   justify-content: flex-end;
   padding: 12px;
   box-sizing: border-box;
-  font-family:
-    ui-rounded,
-    'SF Pro Rounded',
-    -apple-system,
-    BlinkMacSystemFont,
-    sans-serif;
+  font-family: var(--vc-font-rounded);
+  -webkit-font-smoothing: antialiased;
 }
 
 .visual-copilot-pet__sprite {
@@ -32,6 +30,7 @@ body,
   -webkit-app-region: drag;
 }
 
+/* Soft ground shadow under the fox */
 .visual-copilot-pet__sprite::before {
   position: absolute;
   right: 20px;
@@ -39,14 +38,14 @@ body,
   width: 92px;
   height: 28px;
   border-radius: 50%;
-  background: rgba(22, 35, 52, 0.18);
+  background: rgba(15, 23, 42, 0.2);
   content: '';
   filter: blur(10px);
-  opacity: 0.55;
+  opacity: 0.5;
   transform: scale(0.82);
   transition:
-    opacity 180ms ease,
-    transform 180ms ease;
+    opacity var(--vc-t-med) var(--vc-ease),
+    transform var(--vc-t-med) var(--vc-ease);
 }
 
 .visual-copilot-pet__sprite .pet-image {
@@ -58,20 +57,21 @@ body,
   -webkit-app-region: drag;
   transform: scale(0.78);
   transition:
-    filter 180ms ease,
-    transform 180ms ease;
+    filter var(--vc-t-med) var(--vc-ease),
+    transform var(--vc-t-med) var(--vc-ease);
 }
 
 .visual-copilot-pet__sprite:hover .pet-image {
-  filter: drop-shadow(0 10px 13px rgba(24, 38, 57, 0.22));
+  filter: drop-shadow(0 10px 14px rgba(15, 23, 42, 0.24));
   transform: scale(0.82) translateY(-3px);
 }
 
 .visual-copilot-pet__sprite:hover::before {
-  opacity: 0.75;
+  opacity: 0.72;
   transform: scale(0.94);
 }
 
+/* Invisible click target over the fox */
 .visual-copilot-pet__action {
   position: absolute;
   top: 50%;
@@ -90,33 +90,40 @@ body,
 }
 
 .visual-copilot-pet__action:focus-visible {
-  outline: 3px solid rgba(91, 150, 255, 0.78);
+  outline: 2.5px solid var(--vc-accent-border);
   outline-offset: 4px;
 }
 
+/* Hover hint pill */
 .visual-copilot-pet__hint {
   position: absolute;
   z-index: 2;
-  top: 8px;
+  top: 4px;
   left: 50%;
-  padding: 7px 11px;
-  transform: translate(-50%, 5px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 999px;
-  color: white;
-  background: rgba(20, 30, 45, 0.88);
-  box-shadow: 0 9px 24px rgba(19, 31, 49, 0.2);
-  backdrop-filter: blur(16px);
+  padding: 7px 12px;
+  transform: translate(-50%, 6px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--vc-r-pill);
+  color: var(--vc-overlay-ink);
+  background: var(--vc-overlay-surface);
+  box-shadow:
+    0 8px 22px rgba(4, 8, 18, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  font-family: var(--vc-font);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.01em;
+  white-space: nowrap;
   opacity: 0;
   pointer-events: none;
   transition:
-    opacity 160ms ease,
-    transform 160ms ease;
+    opacity var(--vc-t-med) var(--vc-ease),
+    transform var(--vc-t-med) var(--vc-ease);
 }
 
+/* Crosshair badge */
 .visual-copilot-pet__badge {
   position: absolute;
   z-index: 2;
@@ -126,16 +133,16 @@ body,
   width: 28px;
   height: 28px;
   place-items: center;
-  border: 2px solid rgba(255, 255, 255, 0.94);
+  border: 2px solid var(--vc-overlay-ink);
   border-radius: 50%;
-  background: linear-gradient(145deg, #4e7cf2, #2f5fda);
+  background: linear-gradient(145deg, #6d6de0, var(--vc-accent));
   box-shadow:
-    0 5px 14px rgba(33, 77, 179, 0.34),
+    0 5px 14px rgba(74, 73, 196, 0.4),
     0 1px 2px rgba(14, 28, 56, 0.2);
   pointer-events: none;
   transition:
-    box-shadow 180ms ease,
-    transform 180ms ease;
+    box-shadow var(--vc-t-med) var(--vc-ease),
+    transform var(--vc-t-med) var(--vc-ease);
 }
 
 .visual-copilot-pet__badge::before,
@@ -148,27 +155,27 @@ body,
 .visual-copilot-pet__badge::before {
   width: 12px;
   height: 12px;
-  border: 1.5px solid white;
+  border: 1.5px solid var(--vc-overlay-ink);
   border-radius: 50%;
 }
 
 .visual-copilot-pet__badge::after {
   width: 17px;
   height: 1.5px;
-  background: white;
+  background: var(--vc-overlay-ink);
 }
 
 .visual-copilot-pet__badge > span {
   width: 1.5px;
   height: 17px;
-  background: white;
+  background: var(--vc-overlay-ink);
 }
 
 .visual-copilot-pet__sprite:hover .visual-copilot-pet__badge {
   box-shadow:
-    0 7px 18px rgba(33, 77, 179, 0.42),
+    0 7px 18px rgba(74, 73, 196, 0.5),
     0 1px 2px rgba(14, 28, 56, 0.2);
-  transform: translateY(-2px) rotate(4deg);
+  transform: translateY(-2px) rotate(6deg);
 }
 
 .visual-copilot-pet:has(.visual-copilot-pet__sprite:hover)

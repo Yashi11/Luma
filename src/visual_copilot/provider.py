@@ -58,8 +58,8 @@ VOICE_CONTROL_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "name": "mute_voice",
         "description": (
-            "Mute Visual Copilot's microphone and audio when the user explicitly asks "
-            "to mute, stop listening, or be quiet."
+            "Mute Visual Copilot's microphone when the user explicitly asks to mute "
+            "or stop listening. Current response audio continues playing."
         ),
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         "strict": True,

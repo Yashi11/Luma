@@ -29,7 +29,11 @@ interface ActiveTurn {
   noiseRms: number;
   noiseFrames: number;
   preSpeechChunks: string[];
+  muted: boolean;
+  timeoutRemainingMs: number;
+  timeoutStartedAt: number;
   settled: boolean;
+  muteFinalizeTimer?: number;
   timer?: number;
   resolve: (recording: VoiceRecording) => void;
   reject: (error: Error) => void;
@@ -52,6 +56,7 @@ const PRE_SPEECH_PCM_CHUNKS = 6;
 
 let capture: RecorderCapture | undefined;
 let capturePromise: Promise<RecorderCapture> | undefined;
+let captureMuted = false;
 let generation = 0;
 
 function resample(input: Float32Array, inputRate: number): Float32Array {
@@ -95,6 +100,11 @@ function settleTurn(current: RecorderCapture, turn: ActiveTurn, error?: Error) {
   if (turn.settled) return;
   turn.settled = true;
   if (turn.timer !== undefined) window.clearTimeout(turn.timer);
+  if (turn.muteFinalizeTimer !== undefined) {
+    window.clearTimeout(turn.muteFinalizeTimer);
+  }
+  turn.timer = undefined;
+  turn.muteFinalizeTimer = undefined;
   if (current.activeTurn === turn) current.activeTurn = undefined;
   if (error) turn.reject(error);
   else turn.resolve({ durationMs: performance.now() - turn.startedAt });
@@ -116,6 +126,52 @@ function finishTurn(
     return;
   }
   settleTurn(current, turn);
+}
+
+function scheduleTurnTimeout(current: RecorderCapture, turn: ActiveTurn) {
+  if (turn.settled || turn.muted) return;
+  turn.timeoutStartedAt = performance.now();
+  turn.timer = window.setTimeout(
+    () => finishTurn(current, turn, true),
+    Math.max(0, turn.timeoutRemainingMs),
+  );
+}
+
+function applyCaptureMuted(current: RecorderCapture, muted: boolean) {
+  current.stream.getAudioTracks().forEach((track) => {
+    track.enabled = !muted;
+  });
+  const turn = current.activeTurn;
+  if (!turn || turn.settled || turn.muted === muted) return;
+  turn.muted = muted;
+  if (muted) {
+    if (turn.timer !== undefined) {
+      window.clearTimeout(turn.timer);
+      turn.timer = undefined;
+      turn.timeoutRemainingMs = Math.max(
+        0,
+        turn.timeoutRemainingMs - (performance.now() - turn.timeoutStartedAt),
+      );
+    }
+    turn.speechCandidateMs = 0;
+    turn.preSpeechChunks.length = 0;
+    if (turn.speechDetected) {
+      const silenceMs =
+        turn.options.silenceMs ?? DEFAULT_END_OF_SPEECH_SILENCE_MS;
+      turn.muteFinalizeTimer = window.setTimeout(
+        () => finishTurn(current, turn, false),
+        Math.max(0, silenceMs - (performance.now() - turn.lastVoiceAt)),
+      );
+    }
+    return;
+  }
+  if (turn.muteFinalizeTimer !== undefined) {
+    window.clearTimeout(turn.muteFinalizeTimer);
+    turn.muteFinalizeTimer = undefined;
+  }
+  turn.lastVoiceAt = performance.now();
+  turn.options.onStatus?.(turn.speechDetected ? 'speaking' : 'listening');
+  scheduleTurnTimeout(current, turn);
 }
 
 async function ensureCapture(): Promise<RecorderCapture> {
@@ -166,6 +222,9 @@ async function ensureCapture(): Promise<RecorderCapture> {
       stream.getTracks().forEach((track) => track.stop());
       throw new Error('Voice recording cancelled.');
     }
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = !captureMuted;
+    });
     const context = new AudioContext();
     if (context.state === 'suspended') await context.resume();
     const source = context.createMediaStreamSource(stream);
@@ -185,7 +244,7 @@ async function ensureCapture(): Promise<RecorderCapture> {
     processor.onaudioprocess = (event) => {
       if (capture !== current) return;
       const turn = current.activeTurn;
-      if (!turn || turn.settled) return;
+      if (!turn || turn.settled || turn.muted) return;
       const input = new Float32Array(event.inputBuffer.getChannelData(0));
       const pcm = bytesToBase64(
         encodePcm16(resample(input, current.context.sampleRate)),
@@ -255,8 +314,14 @@ export async function prewarmVoiceRecorder(): Promise<void> {
   await ensureCapture();
 }
 
+export function setVoiceRecorderMuted(muted: boolean): void {
+  captureMuted = muted;
+  if (capture) applyCaptureMuted(capture, muted);
+}
+
 export function closeVoiceRecorder(): void {
   generation += 1;
+  captureMuted = false;
   const current = capture;
   capture = undefined;
   capturePromise = undefined;
@@ -280,6 +345,7 @@ export async function startVoiceRecorder(
   options: VoiceRecorderOptions,
 ): Promise<ActiveVoiceRecorder> {
   const current = await ensureCapture();
+  if (captureMuted) throw new Error('Voice recording cancelled.');
   if (current.activeTurn) {
     throw new Error('A microphone turn is already active.');
   }
@@ -298,16 +364,16 @@ export async function startVoiceRecorder(
     noiseRms: 0.004,
     noiseFrames: 0,
     preSpeechChunks: [],
+    muted: false,
+    timeoutRemainingMs: options.maxDurationMs ?? 30_000,
+    timeoutStartedAt: performance.now(),
     settled: false,
     resolve: resolveDone,
     reject: rejectDone,
   };
   current.activeTurn = turn;
   options.onStatus?.('listening');
-  turn.timer = window.setTimeout(
-    () => finishTurn(current, turn, true),
-    options.maxDurationMs ?? 30_000,
-  );
+  scheduleTurnTimeout(current, turn);
   return {
     done,
     stop: () => finishTurn(current, turn, false),

@@ -100,13 +100,14 @@ class DeepgramStreamingTranscriber:
         while not self._closed:
             try:
                 await asyncio.sleep(DEEPGRAM_KEEPALIVE_SECONDS)
-                if self._turn_lock.locked():
-                    continue
                 websocket = self._socket
                 if websocket is None:
                     await self.prewarm()
                     continue
-                if time.monotonic() - self._opened_at >= DEEPGRAM_SOCKET_ROTATION_SECONDS:
+                if (
+                    not self._turn_lock.locked()
+                    and time.monotonic() - self._opened_at >= DEEPGRAM_SOCKET_ROTATION_SECONDS
+                ):
                     await self._discard_socket()
                     await self.prewarm()
                     continue

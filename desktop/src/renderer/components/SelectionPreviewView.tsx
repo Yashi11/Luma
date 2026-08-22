@@ -5,6 +5,7 @@ import PcmStreamPlayer from '../pcm-stream-player';
 import {
   closeVoiceRecorder,
   prewarmVoiceRecorder,
+  setVoiceRecorderMuted,
   startVoiceRecorder,
 } from '../selection-pcm-recorder';
 import type { ActiveVoiceRecorder } from '../selection-pcm-recorder';
@@ -441,15 +442,15 @@ export default function SelectionPreviewView() {
     mutedRef.current = nextMuted;
     setMuted(nextMuted);
     setVoiceError('');
+    setVoiceRecorderMuted(nextMuted);
     if (nextMuted) {
-      playbackGenerationRef.current += 1;
-      nudgeActiveRef.current = false;
-      ignoreAnswerAudioRef.current = true;
-      recorderRef.current?.cancel();
-      window.electron.ipcRenderer.sendMessage('selection-voice-cancel');
-      stopSpeech();
-      setVoiceState('idle');
       return;
+    }
+    if (recorderRef.current || voiceTurnStartingRef.current) return;
+    if (nudgeActiveRef.current) {
+      await pcmPlayerRef.current.whenIdle();
+      if (mutedRef.current || !nudgeActiveRef.current) return;
+      nudgeActiveRef.current = false;
     }
     await beginVoiceRef.current();
   };
@@ -460,7 +461,7 @@ export default function SelectionPreviewView() {
     voiceState === 'speaking' ||
     voiceState === 'answering';
   const voiceStatus = muted
-    ? 'Muted. Unmute whenever you want to continue.'
+    ? 'Microphone muted. Coco audio will keep playing.'
     : {
         requesting: 'Opening the live voice stream…',
         listening: 'Listening and transcribing live…',
@@ -590,6 +591,8 @@ export default function SelectionPreviewView() {
             }`}
             type="button"
             aria-pressed={muted}
+            aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
+            title={muted ? 'Unmute microphone' : 'Mute microphone'}
             onClick={() => changeMuted(!muted)}
           >
             <span className="selection-mute-button__icon" aria-hidden>
