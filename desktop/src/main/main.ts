@@ -85,6 +85,9 @@ app.setName('coco');
 
 // This product uses CoCo's desktop shell without its continuous observer.
 const VISUAL_COPILOT_MODE = true;
+if (VISUAL_COPILOT_MODE) {
+  app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+}
 const visualCopilotCapabilityToken = SelectionController.createToken();
 process.env.VISUAL_COPILOT_CAPABILITY_TOKEN = visualCopilotCapabilityToken;
 
@@ -3455,6 +3458,9 @@ const startObserver = () => {
 app
   .whenReady()
   .then(async () => {
+    if (VISUAL_COPILOT_MODE && process.platform === 'darwin') {
+      app.setActivationPolicy('accessory');
+    }
     await configureLocalServicePorts();
     if (!VISUAL_COPILOT_MODE) initializeWakeWordService();
     selectionController = new SelectionController(

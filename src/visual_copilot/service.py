@@ -8,8 +8,9 @@ from collections.abc import Callable, Mapping
 from threading import RLock
 from uuid import uuid4
 
-from .capture import RegionCapture
+from .capture import InMemoryRegionCapture, RegionCapture
 from .geometry import DisplaySnapshot, Rectangle
+from .privacy import StrictOutboundRequest
 from .provider import Explanation, VisionProvider
 from .session import SelectionSession
 
@@ -80,6 +81,19 @@ class LocalSelectionService:
         )
         return session.capture_region(self._capturer, current).png
 
+    def capture_png(
+        self,
+        token: str,
+        session_id: str,
+        png: bytes,
+        current_display_payload: Mapping[str, object],
+    ) -> bytes:
+        """Accept an Electron-cropped image and bind it to the frozen region."""
+        session = self._session(token, session_id)
+        current = parse_display_snapshot(current_display_payload)
+        capturer = InMemoryRegionCapture(lambda _region: png)
+        return session.capture_region(capturer, current).png
+
     def preview(
         self,
         token: str,
@@ -101,6 +115,34 @@ class LocalSelectionService:
 
     def state(self, token: str, session_id: str) -> str:
         return self._session(token, session_id).state.value
+
+    def answer(self, token: str, session_id: str) -> Explanation:
+        session = self._session(token, session_id)
+        if session.state.value != "completed" or session.result is None:
+            raise ValueError("spoken answer is not available in this session state")
+        return session.result
+
+    def begin_stream(
+        self,
+        token: str,
+        session_id: str,
+        question: str,
+    ) -> StrictOutboundRequest:
+        return self._session(token, session_id).begin_stream(
+            question,
+            self._provider_metadata,
+        )
+
+    def complete_stream(
+        self,
+        token: str,
+        session_id: str,
+        answer: str,
+    ) -> Explanation:
+        return self._session(token, session_id).complete_stream(answer)
+
+    def fail_stream(self, token: str, session_id: str, error: str) -> None:
+        self._session(token, session_id).fail_stream(error)
 
 
 _DISPLAY_FIELDS = {

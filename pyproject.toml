@@ -21,6 +21,7 @@ dependencies = [
     "Pillow>=10.0",
     "fastapi>=0.115",
     "uvicorn>=0.34",
+    "websockets>=17,<18",
 ]
 
 [tool.setuptools.packages.find]

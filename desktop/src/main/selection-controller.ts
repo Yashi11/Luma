@@ -1,6 +1,13 @@
 import { randomBytes } from 'crypto';
 import axios, { AxiosInstance } from 'axios';
-import { BrowserWindow, Display, ipcMain, screen } from 'electron';
+import {
+  BrowserWindow,
+  desktopCapturer,
+  Display,
+  ipcMain,
+  screen,
+  systemPreferences,
+} from 'electron';
 import log from 'electron-log';
 import { serviceManager } from './services/manager';
 
@@ -21,6 +28,25 @@ type PreviewState = {
   uncertainty?: string | null;
   needsMoreContext?: boolean;
   error?: string;
+  turns?: Array<{ role: 'user' | 'assistant'; text: string }>;
+};
+
+type VoiceEvent = {
+  type: string;
+  text?: string;
+  transcript?: string;
+  delta?: string;
+  audio?: string;
+  answer?: string;
+  message?: string;
+  sample_rate?: number;
+};
+
+type Crop = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
 const displayPayload = (display: Display) => {
@@ -58,6 +84,16 @@ export default class SelectionController {
 
   private activeDisplayId: number | null = null;
 
+  private voiceSocket: WebSocket | null = null;
+
+  private nudgeSocket: WebSocket | null = null;
+
+  private nudgedSessionId: string | null = null;
+
+  private streamedAnswer = '';
+
+  private streamedQuestion = '';
+
   constructor(
     private readonly port: number,
     private readonly token: string,
@@ -90,6 +126,16 @@ export default class SelectionController {
         ...(process.env.OPENAI_API_KEY?.trim()
           ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY.trim() }
           : {}),
+        ...(process.env.DEEPGRAM_API_KEY?.trim()
+          ? { DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY.trim() }
+          : {}),
+        ...(process.env.ELEVENLABS_API_KEY?.trim()
+          ? { ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY.trim() }
+          : {}),
+        ...(process.env.ELEVEN_LABS_VOICE_ID?.trim()
+          ? { ELEVEN_LABS_VOICE_ID: process.env.ELEVEN_LABS_VOICE_ID.trim() }
+          : {}),
+        VISUAL_COPILOT_CAPTURE_MODE: 'electron',
       },
       true,
     );
@@ -97,7 +143,7 @@ export default class SelectionController {
   }
 
   async activate(): Promise<void> {
-    this.closeWindows();
+    await this.cancel();
     const cursor = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(cursor);
     this.activeDisplayId = display.id;
@@ -137,6 +183,7 @@ export default class SelectionController {
   private createOverlay(display: Display): void {
     this.overlayWindow = new BrowserWindow({
       ...display.bounds,
+      type: process.platform === 'darwin' ? 'panel' : undefined,
       show: false,
       frame: false,
       transparent: true,
@@ -151,6 +198,7 @@ export default class SelectionController {
     this.overlayWindow.setAlwaysOnTop(true, 'screen-saver');
     this.overlayWindow.setVisibleOnAllWorkspaces(true, {
       visibleOnFullScreen: true,
+      skipTransformProcessType: process.platform === 'darwin',
     });
     this.overlayWindow
       .loadURL(`${this.resolveHtmlPath('index.html')}?view=selection-overlay`)
@@ -182,14 +230,46 @@ export default class SelectionController {
       resizable: true,
       alwaysOnTop: true,
       skipTaskbar: true,
-      webPreferences: { preload: this.preloadPath() },
+      webPreferences: {
+        preload: this.preloadPath(),
+        partition: 'visual-copilot-selection',
+      },
+    });
+    const previewSession = this.previewWindow.webContents.session;
+    previewSession.setPermissionCheckHandler(
+      (webContents, permission, _origin, details) =>
+        webContents === this.previewWindow?.webContents &&
+        permission === 'media' &&
+        details.mediaType === 'audio',
+    );
+    previewSession.setPermissionRequestHandler(
+      (webContents, permission, callback, details) => {
+        const mediaTypes =
+          'mediaTypes' in details && Array.isArray(details.mediaTypes)
+            ? details.mediaTypes
+            : [];
+        callback(
+          webContents === this.previewWindow?.webContents &&
+            permission === 'media' &&
+            mediaTypes.includes('audio') &&
+            !mediaTypes.includes('video'),
+        );
+      },
+    );
+    this.previewWindow.setAlwaysOnTop(true, 'floating');
+    this.previewWindow.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+      skipTransformProcessType: process.platform === 'darwin',
     });
     this.previewWindow
       .loadURL(`${this.resolveHtmlPath('index.html')}?view=selection-preview`)
       .catch((error) =>
         log.error('[Visual Copilot] preview load failed', error),
       );
-    this.previewWindow.once('ready-to-show', () => this.previewWindow?.show());
+    this.previewWindow.once('ready-to-show', () => {
+      this.previewWindow?.show();
+      this.previewWindow?.focus();
+    });
     this.previewWindow.on('closed', () => {
       this.previewWindow = null;
     });
@@ -223,15 +303,48 @@ export default class SelectionController {
     });
     ipcMain.removeAllListeners('selection-preview-ready');
     ipcMain.on('selection-preview-ready', (event) => {
-      if (event.sender === this.previewWindow?.webContents)
+      if (event.sender === this.previewWindow?.webContents) {
         this.publishPreview();
+        this.startNudgeStream();
+      }
     });
-    ipcMain.removeAllListeners('selection-preview-submit');
-    ipcMain.on('selection-preview-submit', (event, question: unknown) => {
-      if (event.sender !== this.previewWindow?.webContents) return;
-      this.submit(typeof question === 'string' ? question : '').catch((error) =>
-        this.showError(SelectionController.messageFor(error)),
-      );
+    ipcMain.removeHandler('selection-voice-start');
+    ipcMain.handle('selection-voice-start', async (event) => {
+      if (event.sender !== this.previewWindow?.webContents) {
+        return { error: 'Voice question is not available.' };
+      }
+      return this.startVoiceStream();
+    });
+    ipcMain.removeAllListeners('selection-voice-audio');
+    ipcMain.on('selection-voice-audio', (event, audio: unknown) => {
+      if (
+        event.sender !== this.previewWindow?.webContents ||
+        this.voiceSocket?.readyState !== WebSocket.OPEN ||
+        typeof audio !== 'string' ||
+        audio.length > 262_144 ||
+        !/^[A-Za-z0-9+/]*={0,2}$/.test(audio)
+      )
+        return;
+      const pcm = Buffer.from(audio, 'base64');
+      if (!pcm.length || pcm.length % 2) return;
+      this.voiceSocket.send(pcm);
+    });
+    ipcMain.removeAllListeners('selection-voice-stop');
+    ipcMain.on('selection-voice-stop', (event) => {
+      if (
+        event.sender === this.previewWindow?.webContents &&
+        this.voiceSocket?.readyState === WebSocket.OPEN
+      ) {
+        this.voiceSocket.send(JSON.stringify({ type: 'stop' }));
+      }
+    });
+    ipcMain.removeHandler('selection-voice-permission');
+    ipcMain.handle('selection-voice-permission', async (event) => {
+      if (event.sender !== this.previewWindow?.webContents) return false;
+      if (process.platform !== 'darwin') return true;
+      if (systemPreferences.getMediaAccessStatus('microphone') === 'granted')
+        return true;
+      return systemPreferences.askForMediaAccess('microphone');
     });
     ipcMain.removeAllListeners('selection-retry');
     ipcMain.on('selection-retry', (event) => {
@@ -248,7 +361,15 @@ export default class SelectionController {
     if (!this.sessionId || this.activeDisplayId == null) return;
     const { sessionId } = this;
     try {
-      await this.api.post(`/sessions/${sessionId}/freeze`, { selection });
+      const frozen = await this.api.post(`/sessions/${sessionId}/freeze`, {
+        selection,
+      });
+      const crop = frozen.data?.crop_px as Crop | undefined;
+      if (
+        !crop ||
+        ![crop.x, crop.y, crop.width, crop.height].every(Number.isFinite)
+      )
+        throw new Error('Selection service returned invalid crop geometry.');
       this.overlayWindow?.hide();
       await new Promise((resolve) => {
         setTimeout(resolve, 60);
@@ -259,8 +380,14 @@ export default class SelectionController {
         .find((item) => item.id === this.activeDisplayId);
       if (!display)
         throw new Error('Display configuration changed; select again.');
+      const imageData = await SelectionController.captureSelectedPixels(
+        display,
+        selection,
+        crop,
+      );
       const capture = await this.api.post(`/sessions/${sessionId}/capture`, {
         display: displayPayload(display),
+        image_data: imageData,
       });
       this.previewState = {
         status: 'preview',
@@ -274,36 +401,225 @@ export default class SelectionController {
     }
   }
 
-  private async submit(question: string): Promise<void> {
-    if (!this.sessionId || this.previewState.status === 'sending') return;
-    const { sessionId } = this;
-    this.previewState = {
-      ...this.previewState,
-      status: 'sending',
-      error: undefined,
+  private static async captureSelectedPixels(
+    display: Display,
+    selection: Selection,
+    expectedCrop: Crop,
+  ): Promise<string> {
+    const targetSize = {
+      width: Math.round(display.bounds.width * display.scaleFactor),
+      height: Math.round(display.bounds.height * display.scaleFactor),
     };
-    this.publishPreview();
+    let sources;
     try {
-      await this.api.post(`/sessions/${sessionId}/preview`, {
-        question: question.trim() || null,
+      sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: targetSize,
+        fetchWindowIcons: false,
       });
-      const response = await this.api.post(`/sessions/${sessionId}/send`);
+    } catch (error) {
+      log.warn('[Visual Copilot] Electron screen capture failed', error);
+      throw new Error(
+        'macOS blocked screen capture for the app that launched Coco. Fully quit Coco and start it again; in development, use npm start so Electron launches with its own Screen Recording permission.',
+      );
+    }
+    const source = sources.find(
+      (item) =>
+        item.display_id === String(display.id) ||
+        item.id === `screen:${display.id}:0`,
+    );
+    if (!source || source.thumbnail.isEmpty()) {
+      throw new Error(
+        'Electron could not capture this display. Enable Electron in System Settings > Privacy & Security > Screen & System Audio Recording, fully quit Electron, then start Coco again.',
+      );
+    }
+
+    const sourceSize = source.thumbnail.getSize();
+    const sourceCrop = {
+      x: Math.max(
+        0,
+        Math.floor((selection.x / display.bounds.width) * sourceSize.width),
+      ),
+      y: Math.max(
+        0,
+        Math.floor((selection.y / display.bounds.height) * sourceSize.height),
+      ),
+      width: Math.max(
+        1,
+        Math.ceil((selection.width / display.bounds.width) * sourceSize.width),
+      ),
+      height: Math.max(
+        1,
+        Math.ceil(
+          (selection.height / display.bounds.height) * sourceSize.height,
+        ),
+      ),
+    };
+    sourceCrop.width = Math.min(
+      sourceCrop.width,
+      sourceSize.width - sourceCrop.x,
+    );
+    sourceCrop.height = Math.min(
+      sourceCrop.height,
+      sourceSize.height - sourceCrop.y,
+    );
+    let selected = source.thumbnail.crop(sourceCrop);
+    if (
+      selected.getSize().width !== expectedCrop.width ||
+      selected.getSize().height !== expectedCrop.height
+    ) {
+      selected = selected.resize({
+        width: expectedCrop.width,
+        height: expectedCrop.height,
+        quality: 'best',
+      });
+    }
+    const png = selected.toPNG();
+    if (!png.length) throw new Error('The selected screen region was empty.');
+    log.info(
+      `[Visual Copilot] Captured display id=${display.id} ` +
+        `frame=${sourceSize.width}x${sourceSize.height} ` +
+        `crop=${JSON.stringify(sourceCrop)}`,
+    );
+    return png.toString('base64');
+  }
+
+  private async startVoiceStream(): Promise<{
+    ready?: boolean;
+    error?: string;
+  }> {
+    if (
+      !this.sessionId ||
+      !['preview', 'answer'].includes(this.previewState.status)
+    ) {
+      return { error: 'Voice question is not available for this selection.' };
+    }
+    this.closeVoiceSocket();
+    this.closeNudgeSocket();
+    this.streamedAnswer = '';
+    this.streamedQuestion = '';
+    const { sessionId } = this;
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${this.port}/sessions/${sessionId}/voice`,
+      [`vc.${this.token}`],
+    );
+    this.voiceSocket = socket;
+    return new Promise((resolve) => {
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout>;
+      const finish = (result: { ready?: boolean; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(result);
+      };
+      timeout = setTimeout(() => {
+        finish({ error: 'Voice streaming service did not become ready.' });
+        socket.close();
+      }, 15_000);
+      socket.onmessage = (message) => {
+        try {
+          const voiceEvent = JSON.parse(String(message.data)) as VoiceEvent;
+          if (voiceEvent.type === 'ready') finish({ ready: true });
+          if (voiceEvent.type === 'error') {
+            finish({ error: voiceEvent.message || 'Voice streaming failed.' });
+          }
+          this.handleVoiceEvent(voiceEvent);
+        } catch (error) {
+          log.warn('[Visual Copilot] invalid voice stream event', error);
+        }
+      };
+      socket.onerror = () => {
+        finish({ error: 'Voice streaming service is unavailable.' });
+      };
+      socket.onclose = () => {
+        if (this.voiceSocket === socket) this.voiceSocket = null;
+        finish({ error: 'Voice streaming connection closed.' });
+      };
+    });
+  }
+
+  private handleVoiceEvent(event: VoiceEvent): void {
+    if (event.type === 'transcript' && typeof event.text === 'string') {
+      this.streamedQuestion = event.text.trim();
+    } else if (event.type === 'llm_start') {
+      this.previewState = {
+        ...this.previewState,
+        status: 'sending',
+        error: undefined,
+      };
+      this.publishPreview();
+    } else if (
+      event.type === 'answer_delta' &&
+      typeof event.delta === 'string'
+    ) {
+      this.streamedAnswer += event.delta;
+    } else if (event.type === 'complete') {
+      const answer =
+        typeof event.answer === 'string' && event.answer.trim()
+          ? event.answer.trim()
+          : this.streamedAnswer.trim();
       this.previewState = {
         ...this.previewState,
         status: 'answer',
-        answer: response.data.explanation,
-        uncertainty: response.data.uncertainty,
-        needsMoreContext: response.data.needs_more_context,
+        answer,
+        turns: [
+          ...(this.previewState.turns ?? []),
+          ...(this.streamedQuestion
+            ? [
+                {
+                  role: 'user' as const,
+                  text: this.streamedQuestion,
+                },
+              ]
+            : []),
+          { role: 'assistant', text: answer },
+        ],
+        uncertainty: null,
+        needsMoreContext: false,
       };
       this.publishPreview();
-    } catch (error) {
+    } else if (event.type === 'error') {
       this.previewState = {
         ...this.previewState,
-        status: 'error',
-        error: SelectionController.messageFor(error),
+        status: this.previewState.turns?.length ? 'answer' : 'preview',
       };
       this.publishPreview();
     }
+    this.previewWindow?.webContents.send('selection-voice-event', event);
+  }
+
+  private startNudgeStream(): void {
+    if (
+      !this.sessionId ||
+      this.previewState.status !== 'preview' ||
+      this.nudgedSessionId === this.sessionId
+    )
+      return;
+    this.closeNudgeSocket();
+    this.nudgedSessionId = this.sessionId;
+    const socket = new WebSocket(
+      `ws://127.0.0.1:${this.port}/sessions/${this.sessionId}/nudge`,
+      [`vc.${this.token}`],
+    );
+    this.nudgeSocket = socket;
+    socket.onmessage = (message) => {
+      try {
+        const voiceEvent = JSON.parse(String(message.data)) as VoiceEvent;
+        this.previewWindow?.webContents.send(
+          'selection-voice-event',
+          voiceEvent,
+        );
+      } catch (error) {
+        log.warn('[Visual Copilot] invalid context nudge event', error);
+      }
+    };
+    socket.onerror = () => {
+      log.warn('[Visual Copilot] context nudge stream is unavailable');
+    };
+    socket.onclose = () => {
+      if (this.nudgeSocket === socket) this.nudgeSocket = null;
+    };
   }
 
   private showError(message: string): void {
@@ -323,12 +639,23 @@ export default class SelectionController {
       if (error.code === 'ECONNREFUSED')
         return 'Selection service is unavailable.';
     }
+    if (typeof error === 'string' && error.trim()) return error;
+    if (
+      error &&
+      typeof error === 'object' &&
+      'message' in error &&
+      typeof error.message === 'string' &&
+      error.message.trim()
+    )
+      return error.message;
     return error instanceof Error
       ? error.message
       : 'Visual Copilot request failed.';
   }
 
   private async cancel(closePreview = true): Promise<void> {
+    this.closeVoiceSocket();
+    this.closeNudgeSocket();
     const { sessionId } = this;
     this.sessionId = null;
     if (sessionId) {
@@ -344,11 +671,27 @@ export default class SelectionController {
     }
   }
 
-  private closeWindows(): void {
-    this.overlayWindow?.destroy();
-    this.previewWindow?.destroy();
-    this.overlayWindow = null;
-    this.previewWindow = null;
-    this.sessionId = null;
+  private closeVoiceSocket(): void {
+    const socket = this.voiceSocket;
+    this.voiceSocket = null;
+    if (
+      socket &&
+      (socket.readyState === WebSocket.CONNECTING ||
+        socket.readyState === WebSocket.OPEN)
+    ) {
+      socket.close();
+    }
+  }
+
+  private closeNudgeSocket(): void {
+    const socket = this.nudgeSocket;
+    this.nudgeSocket = null;
+    if (
+      socket &&
+      (socket.readyState === WebSocket.CONNECTING ||
+        socket.readyState === WebSocket.OPEN)
+    ) {
+      socket.close();
+    }
   }
 }

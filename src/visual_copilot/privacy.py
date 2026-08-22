@@ -4,13 +4,23 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from .capture import CapturedCrop, verify_crop_provenance
 from .context import SelectionCaptureContext
 
 DEFAULT_QUESTION = "Explain this."
 MAX_QUESTION_CHARS = 4_000
+MAX_CONVERSATION_TURNS = 24
+MAX_CONVERSATION_CHARS = 24_000
 _ALLOWED_METADATA = {"provider", "model", "request_id"}
+
+
+@dataclass(frozen=True)
+class ConversationTurn:
+    role: Literal["user", "assistant"]
+    text: str
+
 
 @dataclass(frozen=True)
 class StrictOutboundRequest:
@@ -18,6 +28,7 @@ class StrictOutboundRequest:
     context: SelectionCaptureContext
     question: str
     metadata: Mapping[str, str]
+    conversation: tuple[ConversationTurn, ...] = ()
 
     @property
     def image_png(self) -> bytes:
@@ -29,6 +40,18 @@ class StrictOutboundRequest:
             raise TypeError("question must be a string")
         if not self.question or len(self.question) > MAX_QUESTION_CHARS:
             raise ValueError("question is empty or too long")
+        if len(self.conversation) > MAX_CONVERSATION_TURNS:
+            raise ValueError("conversation has too many turns")
+        if any(
+            not isinstance(turn, ConversationTurn)
+            or turn.role not in {"user", "assistant"}
+            or not isinstance(turn.text, str)
+            or not turn.text.strip()
+            for turn in self.conversation
+        ):
+            raise ValueError("conversation contains an invalid turn")
+        if sum(len(turn.text) for turn in self.conversation) > MAX_CONVERSATION_CHARS:
+            raise ValueError("conversation is too long")
         if any(key not in _ALLOWED_METADATA for key in self.metadata):
             raise ValueError("outbound metadata contains a forbidden field")
         if any(
@@ -44,6 +67,7 @@ class StrictOutboundRequest:
         return {
             "image_png": self.image_png,
             "question": self.question,
+            "conversation": [{"role": turn.role, "text": turn.text} for turn in self.conversation],
             "metadata": dict(self.metadata),
         }
 
@@ -53,6 +77,7 @@ def build_strict_request(
     context: SelectionCaptureContext,
     question: str | None,
     metadata: Mapping[str, str] | None = None,
+    conversation: tuple[ConversationTurn, ...] = (),
 ) -> StrictOutboundRequest:
     if question is not None and not isinstance(question, str):
         raise TypeError("question must be a string or None")
@@ -71,7 +96,13 @@ def build_strict_request(
     clean_metadata = dict(supplied_metadata)
     if any(len(key) > 64 or len(value) > 512 for key, value in clean_metadata.items()):
         raise ValueError("provider metadata exceeds OpenAI limits")
-    request = StrictOutboundRequest(captured_crop, context, clean_question, clean_metadata)
+    request = StrictOutboundRequest(
+        captured_crop,
+        context,
+        clean_question,
+        clean_metadata,
+        conversation,
+    )
     request.validate()
     return request
 

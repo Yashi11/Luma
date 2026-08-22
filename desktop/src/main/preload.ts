@@ -114,7 +114,11 @@ export type Channels =
   | 'selection-cancel'
   | 'selection-preview-ready'
   | 'selection-preview-state'
-  | 'selection-preview-submit'
+  | 'selection-voice-permission'
+  | 'selection-voice-start'
+  | 'selection-voice-audio'
+  | 'selection-voice-stop'
+  | 'selection-voice-event'
   | 'selection-retry';
 
 const electronHandler = {

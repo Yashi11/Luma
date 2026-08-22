@@ -10,6 +10,9 @@ const PROVIDER_ENV_NAMES = new Set([
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',
   'OPENAI_API_KEY',
+  'DEEPGRAM_API_KEY',
+  'ELEVENLABS_API_KEY',
+  'ELEVEN_LABS_VOICE_ID',
   'TINFOIL_API_KEY',
   'HOSTED_VLLM_API_KEY',
   'HOSTED_VLLM_API_BASE',
@@ -121,7 +124,12 @@ export class ServiceManager {
   }
 
   /** register a spawned child process into the global registry */
-  public registerProcess(id: string, proc: ChildProcess, cfg?: ServiceConfig) {
+  public registerProcess(
+    id: string,
+    proc: ChildProcess,
+    cfg?: ServiceConfig,
+    logStream?: fs.WriteStream | null,
+  ) {
     const existing = this.services.get(id);
     if (existing) {
       existing.process = proc;
@@ -150,7 +158,7 @@ export class ServiceManager {
       }
     });
 
-    ServiceManager.attachPipesToChild(id, proc);
+    ServiceManager.attachPipesToChild(id, proc, logStream);
   }
 
   /** load services configuration from a JSON file (default dev path) */
@@ -693,21 +701,24 @@ export class ServiceManager {
 
     log.info(`[ServiceManager] ✅ Process spawned: PID=${child.pid}`);
 
-    ServiceManager.attachPipesToChild(id, child, logStream);
-
-    this.registerProcess(id, child, {
+    this.registerProcess(
       id,
-      name: id,
-      command,
-      args,
-      cwd,
-      logPath: opts?.logPath,
-      env: opts?.env
-        ? (Object.fromEntries(
-            Object.entries(opts?.env).filter(([, v]) => v !== undefined),
-          ) as Record<string, string>)
-        : undefined,
-    });
+      child,
+      {
+        id,
+        name: id,
+        command,
+        args,
+        cwd,
+        logPath: opts?.logPath,
+        env: opts?.env
+          ? (Object.fromEntries(
+              Object.entries(opts?.env).filter(([, v]) => v !== undefined),
+            ) as Record<string, string>)
+          : undefined,
+      },
+      logStream,
+    );
     const s = this.services.get(id);
     if (s) s.logStream = logStream;
 

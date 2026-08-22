@@ -9,8 +9,8 @@ from threading import RLock
 from .capture import CapturedCrop, RegionCapture
 from .context import SelectionCaptureContext
 from .geometry import DisplaySnapshot, Rectangle
-from .privacy import StrictOutboundRequest, build_strict_request
-from .provider import Explanation, VisionProvider
+from .privacy import ConversationTurn, StrictOutboundRequest, build_strict_request
+from .provider import CONTEXT_NUDGE, Explanation, VisionProvider
 
 
 class SessionState(StrEnum):
@@ -39,6 +39,8 @@ class SelectionSession:
         self.request: StrictOutboundRequest | None = None
         self.result: Explanation | None = None
         self.error: str | None = None
+        self.conversation: list[ConversationTurn] = [ConversationTurn("assistant", CONTEXT_NUDGE)]
+        self._pending_question: str | None = None
         self._lock = RLock()
 
     @property
@@ -48,7 +50,9 @@ class SelectionSession:
     def _require(self, *states: SessionState) -> None:
         if self.state not in states:
             allowed = ", ".join(state.value for state in states)
-            raise InvalidTransition(f"state {self.state.value} does not allow this action; expected {allowed}")
+            raise InvalidTransition(
+                f"state {self.state.value} does not allow this action; expected {allowed}"
+            )
 
     def freeze_geometry(self, selection: Rectangle) -> SelectionCaptureContext:
         with self._lock:
@@ -109,6 +113,62 @@ class SelectionSession:
             self.state = SessionState.COMPLETED
             return result
 
+    def begin_stream(
+        self,
+        question: str,
+        metadata: Mapping[str, str] | None = None,
+    ) -> StrictOutboundRequest:
+        """Bind the live voice transcript to the selected pixels before streaming."""
+        with self._lock:
+            self._require(
+                SessionState.CAPTURED,
+                SessionState.COMPLETED,
+                SessionState.FAILED,
+            )
+            if self.context is None or self.crop is None:
+                raise InvalidTransition("selected pixels are unavailable")
+            self.request = build_strict_request(
+                self.crop,
+                self.context,
+                question,
+                metadata,
+                tuple(self.conversation),
+            )
+            self._pending_question = self.request.question
+            self.result = None
+            self.error = None
+            self.state = SessionState.SENDING
+            return self.request
+
+    def complete_stream(self, answer: str) -> Explanation:
+        with self._lock:
+            self._require(SessionState.SENDING)
+            if not answer.strip():
+                raise ValueError("streamed answer is empty")
+            if self._pending_question is None:
+                raise InvalidTransition("no pending conversation turn exists")
+            self.result = Explanation(answer.strip())
+            self.conversation.extend(
+                (
+                    ConversationTurn("user", self._pending_question),
+                    ConversationTurn("assistant", answer.strip()),
+                )
+            )
+            if len(self.conversation) > 24:
+                self.conversation = [self.conversation[0], *self.conversation[-23:]]
+            self._pending_question = None
+            self.request = None
+            self.state = SessionState.COMPLETED
+            return self.result
+
+    def fail_stream(self, error: str) -> None:
+        with self._lock:
+            self._require(SessionState.SENDING)
+            self.error = error
+            self._pending_question = None
+            self.request = None
+            self.state = SessionState.FAILED
+
     def cancel(self) -> None:
         with self._lock:
             self._require(
@@ -117,9 +177,13 @@ class SelectionSession:
                 SessionState.OVERLAY_HIDDEN,
                 SessionState.CAPTURED,
                 SessionState.PREVIEW,
+                SessionState.SENDING,
+                SessionState.COMPLETED,
                 SessionState.FAILED,
             )
             self.crop = None
             self.request = None
             self.result = None
+            self.conversation.clear()
+            self._pending_question = None
             self.state = SessionState.CANCELLED
