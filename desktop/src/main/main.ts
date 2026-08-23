@@ -35,6 +35,7 @@ import axios from 'axios';
 import { resolveHtmlPath } from './util';
 import { serviceManager } from './services/manager';
 import { configureServiceModelArguments } from './services/model-arguments';
+import showOnEveryWorkspace from './window-workspaces';
 import {
   startObservationStream,
   stopObservationStream,
@@ -439,7 +440,10 @@ const createAvatarWindow = () => {
   avatarRendererReady = false;
   const visualPetBounds = (() => {
     if (!VISUAL_COPILOT_MODE) return {};
-    const { workArea } = screen.getPrimaryDisplay();
+    const display = screen.getDisplayNearestPoint(
+      screen.getCursorScreenPoint(),
+    );
+    const { workArea } = display;
     return {
       x: workArea.x + workArea.width - 198,
       y: workArea.y + workArea.height - 198,
@@ -462,6 +466,8 @@ const createAvatarWindow = () => {
     skipTaskbar: true,
     webPreferences: { preload: preloadPath() },
   });
+  avatarWindow.setAlwaysOnTop(true, 'floating');
+  showOnEveryWorkspace(avatarWindow);
 
   avatarWindow.loadURL(
     VISUAL_COPILOT_MODE
@@ -524,6 +530,7 @@ const createChatWindow = () => {
     alwaysOnTop: true,
     webPreferences: { preload: preloadPath(), backgroundThrottling: false },
   });
+  showOnEveryWorkspace(chatWindow);
 
   chatWindow.loadURL(
     `${resolveHtmlPath('index.html')}?view=session&mode=visual-copilot`,
@@ -599,7 +606,7 @@ const showChatPanel = () => {
   createChatWindow();
   if (!chatWindow || chatWindow.isDestroyed()) return;
 
-  const disp = screen.getDisplayMatching(chatWindow.getBounds());
+  const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const { x: dx, y: dy, width: sw, height: sh } = disp.workArea;
   const w = isFloatMode ? CHAT_PANEL_W : CHAT_EXPANDED_W;
   const h = Math.min(760, sh - 32);

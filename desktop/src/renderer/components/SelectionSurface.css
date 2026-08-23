@@ -184,23 +184,42 @@ body,
   pointer-events: none;
 }
 
-.selection-lasso__shade {
-  fill: rgba(9, 15, 26, 0.42);
-}
-
-.selection-lasso__fill {
-  fill: rgba(90, 145, 246, 0.1);
-  stroke: rgba(255, 255, 255, 0.7);
-  stroke-width: 4px;
+.selection-lasso__glow {
+  fill: none;
+  stroke: rgba(92, 148, 255, 0.28);
+  stroke-width: 10px;
+  stroke-linecap: round;
   stroke-linejoin: round;
+  filter: blur(4px);
 }
 
 .selection-lasso__line {
   fill: none;
-  stroke: #7aa8ff;
-  stroke-width: 2px;
+  stroke: url('#selection-lasso-gradient');
+  stroke-width: 2.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+  filter: drop-shadow(0 1px 2px rgba(8, 17, 34, 0.56));
+}
+
+.selection-lasso__start {
+  fill: rgba(12, 21, 39, 0.78);
+  stroke: #b7d7ff;
+  stroke-width: 2px;
+  filter: drop-shadow(0 2px 4px rgba(5, 12, 25, 0.5));
+}
+
+.selection-lasso__cursor-halo {
+  fill: rgba(122, 168, 255, 0.2);
+  stroke: rgba(183, 215, 255, 0.24);
+  stroke-width: 1px;
+}
+
+.selection-lasso__cursor {
+  fill: #ffffff;
+  stroke: #7aa8ff;
+  stroke-width: 2px;
+  filter: drop-shadow(0 2px 5px rgba(8, 17, 34, 0.58));
 }
 
 .selection-lasso-size,
@@ -221,6 +240,7 @@ body,
 }
 
 .selection-lasso-size {
+  border: 1px solid rgba(183, 215, 255, 0.24);
   transform: translate(-100%, 6px);
 }
 

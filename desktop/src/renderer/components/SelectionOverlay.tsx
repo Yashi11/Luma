@@ -45,11 +45,28 @@ function appendPoint(points: Point[], point: Point, spacing = POINT_SPACING) {
 
 function pathFrom(points: Point[]) {
   if (!points.length) return '';
-  return `M ${points.map((point) => `${point.x} ${point.y}`).join(' L ')}`;
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+  if (points.length === 2) {
+    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
+  }
+
+  const commands = [`M ${points[0].x} ${points[0].y}`];
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const point = points[index];
+    const next = points[index + 1];
+    const midpoint = {
+      x: (point.x + next.x) / 2,
+      y: (point.y + next.y) / 2,
+    };
+    commands.push(`Q ${point.x} ${point.y} ${midpoint.x} ${midpoint.y}`);
+  }
+  const last = points[points.length - 1];
+  commands.push(`L ${last.x} ${last.y}`);
+  return commands.join(' ');
 }
 
 export default function SelectionOverlay() {
-  const [mode, setMode] = useState<SelectionMode>('rectangle');
+  const [mode, setMode] = useState<SelectionMode>('freeform');
   const [origin, setOrigin] = useState<Point | null>(null);
   const [cursor, setCursor] = useState<Point | null>(null);
   const [freeformPoints, setFreeformPoints] = useState<Point[]>([]);
@@ -82,6 +99,8 @@ export default function SelectionOverlay() {
     () => pathFrom(freeformPoints),
     [freeformPoints],
   );
+  const freeformStart = freeformPoints[0];
+  const freeformEnd = freeformPoints[freeformPoints.length - 1];
 
   const resetDrawing = () => {
     setOrigin(null);
@@ -239,13 +258,39 @@ export default function SelectionOverlay() {
       {mode === 'freeform' && freeformPoints.length > 1 && (
         <>
           <svg className="selection-lasso" aria-hidden>
-            <path
-              className="selection-lasso__shade"
-              fillRule="evenodd"
-              d={`M 0 0 H ${window.innerWidth} V ${window.innerHeight} H 0 Z ${freeformPath} Z`}
-            />
-            <path className="selection-lasso__fill" d={`${freeformPath} Z`} />
+            <defs>
+              <linearGradient
+                id="selection-lasso-gradient"
+                x1="0"
+                y1="0"
+                x2="1"
+                y2="1"
+              >
+                <stop offset="0%" stopColor="#b7d7ff" />
+                <stop offset="48%" stopColor="#7aa8ff" />
+                <stop offset="100%" stopColor="#9b8cff" />
+              </linearGradient>
+            </defs>
+            <path className="selection-lasso__glow" d={freeformPath} />
             <path className="selection-lasso__line" d={freeformPath} />
+            <circle
+              className="selection-lasso__start"
+              cx={freeformStart.x}
+              cy={freeformStart.y}
+              r="5"
+            />
+            <circle
+              className="selection-lasso__cursor-halo"
+              cx={freeformEnd.x}
+              cy={freeformEnd.y}
+              r="9"
+            />
+            <circle
+              className="selection-lasso__cursor"
+              cx={freeformEnd.x}
+              cy={freeformEnd.y}
+              r="4"
+            />
           </svg>
           {freeformBounds && (
             <span
