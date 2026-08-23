@@ -37,4 +37,14 @@ See [docs/architecture.md](docs/architecture.md) for the implemented contracts a
 
 ## Upstream
 
-The desktop shell is based on [collaborative-agents/coco](https://github.com/collaborative-agents/coco) under the Apache License 2.0. See [LICENSE](LICENSE) and [PRIVACY.md](PRIVACY.md).
+Visual Copilot is built on [CoCo: Proactive Co-Assistant Through Continuous Context Observation](https://github.com/collaborative-agents/coco) by Yijia Shao, Yihan Wang, Haowen Wang, and Diyi Yang. CoCo is used under the Apache License 2.0; see [LICENSE](LICENSE) and [PRIVACY.md](PRIVACY.md).
+
+```bibtex
+@software{coco2026,
+  title  = {Coco: Proactive Co-Assistant Through Continuous Context Observation},
+  author = {Shao, Yijia and Wang, Yihan and Wang, Haowen and Yang, Diyi},
+  year   = {2026},
+  url    = {https://github.com/collaborative-agents/coco},
+  note   = {Proactive co-assistant that senses computer-use context and offers timely help, running fully on-device.}
+}
+```
