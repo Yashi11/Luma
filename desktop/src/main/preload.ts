@@ -114,6 +114,7 @@ export type Channels =
   | 'selection-activate'
   | 'selection-complete'
   | 'selection-cancel'
+  | 'selection-minimize'
   | 'selection-preview-ready'
   | 'selection-preview-state'
   | 'selection-voice-permission'

@@ -56,4 +56,15 @@ describe('SelectionPreviewView microphone mute', () => {
       screen.getByRole('button', { name: 'Unmute microphone' }),
     ).toHaveAttribute('aria-pressed', 'true');
   });
+
+  it('minimizes the preview without cancelling the selection', () => {
+    render(<SelectionPreviewView />);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Minimize Visual Copilot' }),
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith('selection-minimize');
+    expect(sendMessage).not.toHaveBeenCalledWith('selection-cancel');
+  });
 });

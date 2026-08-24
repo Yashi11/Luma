@@ -2137,6 +2137,11 @@ ipcMain.on('selection-activate', (event) => {
     minimizeChatPanel();
     return;
   }
+  if (selectionController?.isPreviewVisible()) {
+    log.info('[Visual Copilot] Coco clicked; minimizing selection preview');
+    selectionController.minimizePreview();
+    return;
+  }
   if (selectionController?.showPreviewIfAvailable()) {
     log.info('[Visual Copilot] Panel opened by explicit Coco click');
     return;

@@ -217,6 +217,20 @@ export default class SelectionController {
     return true;
   }
 
+  isPreviewVisible(): boolean {
+    return Boolean(
+      this.previewWindow &&
+        !this.previewWindow.isDestroyed() &&
+        this.previewWindow.isVisible(),
+    );
+  }
+
+  minimizePreview(): void {
+    if (!this.previewWindow || this.previewWindow.isDestroyed()) return;
+    this.previewShouldBeVisible = false;
+    this.previewWindow.hide();
+  }
+
   private async waitUntilReady(): Promise<void> {
     let lastError: unknown;
     for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -369,6 +383,11 @@ export default class SelectionController {
       this.cancel().catch((error) =>
         log.warn('[Visual Copilot] cancel failed', error),
       );
+    });
+    ipcMain.removeAllListeners('selection-minimize');
+    ipcMain.on('selection-minimize', (event) => {
+      if (event.sender !== this.previewWindow?.webContents) return;
+      this.minimizePreview();
     });
     ipcMain.removeAllListeners('selection-preview-ready');
     ipcMain.on('selection-preview-ready', (event) => {

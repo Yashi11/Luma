@@ -489,6 +489,17 @@ export default function SelectionPreviewView() {
           <button
             className="selection-card__close"
             type="button"
+            aria-label="Minimize Visual Copilot"
+            title="Minimize"
+            onClick={() =>
+              window.electron.ipcRenderer.sendMessage('selection-minimize')
+            }
+          >
+            <span aria-hidden>−</span>
+          </button>
+          <button
+            className="selection-card__close"
+            type="button"
             aria-label="Close Visual Copilot"
             title="Close"
             onClick={() =>
