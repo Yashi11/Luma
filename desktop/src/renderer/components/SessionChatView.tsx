@@ -621,6 +621,7 @@ export default function SessionChatView() {
   const [expanded, setExpanded] = useState(false);
   const [contentZoomFactor, setContentZoomFactor] = useState(1);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'llm' | 'asr' | 'tts'>('llm');
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(false);
@@ -2099,6 +2100,24 @@ export default function SessionChatView() {
               Health check failed: {healthError}
             </div>
           )}
+          <div style={S.chips} role="tablist" aria-label="Luma settings categories">
+            {([
+              ['llm', 'LLM'],
+              ['asr', 'ASR'],
+              ['tts', 'TTS'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={settingsTab === id}
+                style={{ ...S.chip, ...(settingsTab === id ? S.chipOn : {}) }}
+                onClick={() => setSettingsTab(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {!visualCopilotMode && (
             <>
           <div style={S.sectionDivider} />
@@ -2156,6 +2175,8 @@ export default function SessionChatView() {
           )}
             </>
           )}
+          {settingsTab === 'llm' && (
+            <>
           <div style={S.sectionDivider} />
 
           <div style={S.groupLabel}>LLM</div>
@@ -2411,6 +2432,10 @@ export default function SessionChatView() {
                   {modelSaveError}
                 </div>
               )}
+            </>
+          )}
+          {settingsTab === 'asr' && (
+            <>
               <div style={S.sectionDivider} />
               <div style={S.groupLabel}>ASR · speech to text</div>
               <div style={S.helpText}>
@@ -2427,7 +2452,12 @@ export default function SessionChatView() {
               <div style={{ ...S.healthDetail, marginTop: 6 }}>
                 {voiceConfigStatus.deepgramConfigured ? 'Configured' : 'Not configured'}
               </div>
+            </>
+          )}
 
+          {settingsTab === 'tts' && (
+            <>
+              <div style={S.sectionDivider} />
               <div style={S.groupLabel}>TTS · text to speech</div>
               <div style={S.helpText}>
                 ElevenLabs speaks Luma&apos;s voice responses. Add a voice ID to enable spoken replies.
@@ -2457,6 +2487,8 @@ export default function SessionChatView() {
                   {voiceConfigError}
                 </div>
               )}
+            </>
+          )}
               <div style={S.sectionDivider} />
           <div style={S.groupLabel}>Desktop</div>
           <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
