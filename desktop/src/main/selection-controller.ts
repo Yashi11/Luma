@@ -10,7 +10,11 @@ import {
 } from 'electron';
 import log from 'electron-log';
 import { serviceManager } from './services/manager';
-import { readServiceCredentials, resolveModelRuntime } from './model-config-store';
+import {
+  providerModelId,
+  readServiceCredentials,
+  resolveModelRuntime,
+} from './model-config-store';
 
 /* eslint-disable no-await-in-loop -- startup readiness polling is intentionally sequential */
 
@@ -137,7 +141,7 @@ export default class SelectionController {
   startService(): void {
     const runtime = resolveModelRuntime();
     const visualModel = runtime?.config.sensing.provider === 'openai'
-      ? runtime.config.sensing.model
+      ? providerModelId(runtime.config.sensing)
       : process.env.OPENAI_MODEL?.trim() || 'gpt-5.6-sol';
     const visualCredentials = runtime?.config.sensing.provider === 'openai'
       ? runtime.sensingEnv

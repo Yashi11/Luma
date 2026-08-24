@@ -1,10 +1,14 @@
 import {
   buildRoleModelEnvironments,
+  providerModelId,
   credentialId,
   validateModelConfiguration,
 } from './model-config-store';
 
 describe('model configuration', () => {
+  it('removes the internal OpenAI namespace before provider calls', () => {
+    expect(providerModelId({ provider: 'openai', model: 'openai/gpt-5.6-sol' })).toBe('gpt-5.6-sol');
+  });
   const sensing = {
     id: 'sensing',
     label: 'Private sensing',

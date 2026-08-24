@@ -87,6 +87,14 @@ export const credentialId = (
   provider: ProviderId,
 ) => `${role}:${provider}`;
 
+// Configuration IDs are namespaced for routing, but provider APIs receive the
+// provider-native model ID. OpenAI rejects the internal `openai/` prefix.
+export function providerModelId(connection: Pick<ModelConnection, 'provider' | 'model'>): string {
+  return connection.provider === 'openai'
+    ? connection.model.replace(/^openai\//, '')
+    : connection.model;
+}
+
 function isProvider(value: unknown): value is ProviderId {
   return typeof value === 'string' && value in PROVIDERS;
 }

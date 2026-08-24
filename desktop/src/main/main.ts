@@ -66,6 +66,7 @@ import {
   getServiceConfigurationView,
   getModelConfigurationView,
   prepareModelConnectionTest,
+  providerModelId,
   readModelConfiguration,
   resolveModelRuntime,
   saveModelConfiguration,
@@ -1476,7 +1477,7 @@ async function testModelConnection(
         ? [
             '--test-model-connection',
             '--model',
-            prepared.connection.model,
+            providerModelId(prepared.connection),
             ...(role === 'sensing' ? ['--include-image'] : []),
           ]
         : [
@@ -1485,7 +1486,7 @@ async function testModelConnection(
             '-m',
             'proactive_tutor.model_connection_test',
             '--model',
-            prepared.connection.model,
+            providerModelId(prepared.connection),
             ...(role === 'sensing' ? ['--include-image'] : []),
           ];
       const cwd = app.isPackaged
