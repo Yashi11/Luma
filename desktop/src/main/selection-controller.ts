@@ -83,6 +83,8 @@ const displayPayload = (display: Display) => {
   };
 };
 
+const SELECTION_REQUEST_TIMEOUT_MS = 10_000;
+
 export default class SelectionController {
   private readonly api: AxiosInstance;
 
@@ -253,9 +255,18 @@ export default class SelectionController {
     });
     this.overlayWindow
       .loadURL(`${this.resolveHtmlPath('index.html')}?view=selection-overlay`)
-      .catch((error) =>
-        log.error('[Visual Copilot] overlay load failed', error),
-      );
+      .catch((error) => {
+        log.error('[Visual Copilot] overlay load failed', error);
+        this.destroyOverlay();
+        this.showError('The selection overlay could not be opened.');
+      });
+    this.overlayWindow.webContents.on('before-input-event', (_event, input) => {
+      if (input.type === 'keyDown' && input.key === 'Escape') {
+        this.cancel().catch((error) =>
+          log.warn('[Visual Copilot] Escape cancellation failed', error),
+        );
+      }
+    });
     this.overlayWindow.once('ready-to-show', () => {
       this.onOverlayVisibilityChange(true);
       this.overlayWindow?.show();
@@ -425,9 +436,11 @@ export default class SelectionController {
     if (!this.sessionId || this.activeDisplayId == null) return;
     const { sessionId } = this;
     try {
-      const frozen = await this.api.post(`/sessions/${sessionId}/freeze`, {
-        selection,
-      });
+      const frozen = await this.api.post(
+        `/sessions/${sessionId}/freeze`,
+        { selection },
+        { timeout: SELECTION_REQUEST_TIMEOUT_MS },
+      );
       const crop = frozen.data?.crop_px as Crop | undefined;
       if (
         !crop ||
@@ -438,7 +451,9 @@ export default class SelectionController {
       await new Promise((resolve) => {
         setTimeout(resolve, 60);
       });
-      await this.api.post(`/sessions/${sessionId}/overlay-hidden`);
+      await this.api.post(`/sessions/${sessionId}/overlay-hidden`, undefined, {
+        timeout: SELECTION_REQUEST_TIMEOUT_MS,
+      });
       const display = screen
         .getAllDisplays()
         .find((item) => item.id === this.activeDisplayId);
@@ -449,23 +464,39 @@ export default class SelectionController {
         selection,
         crop,
       );
-      const capture = await this.api.post(`/sessions/${sessionId}/capture`, {
-        display: displayPayload(display),
-        image_data: imageData,
-      });
+      const capture = await this.api.post(
+        `/sessions/${sessionId}/capture`,
+        {
+          display: displayPayload(display),
+          image_data: imageData,
+        },
+        { timeout: SELECTION_REQUEST_TIMEOUT_MS },
+      );
       this.previewState = {
         status: 'preview',
         imageDataUrl: capture.data.image_data_url,
       };
-      this.overlayWindow?.destroy();
       this.createPreview(display, false);
       log.info(
         '[Visual Copilot] Capture ready; voice process started with panel hidden',
       );
     } catch (error) {
-      this.overlayWindow?.destroy();
       this.showError(SelectionController.messageFor(error));
+    } finally {
+      // The overlay owns the user's mouse and keyboard surface. It must never
+      // survive a failed or timed-out capture operation.
+      this.destroyOverlay();
     }
+  }
+
+  private destroyOverlay(): void {
+    const overlay = this.overlayWindow;
+    if (!overlay || overlay.isDestroyed()) {
+      this.overlayWindow = null;
+      this.onOverlayVisibilityChange(false);
+      return;
+    }
+    overlay.destroy();
   }
 
   private static async captureSelectedPixels(
@@ -733,16 +764,22 @@ export default class SelectionController {
     this.sessionId = null;
     this.previewState = { status: 'preview' };
     this.previewShouldBeVisible = false;
-    if (sessionId) {
-      await this.api
-        .post(`/sessions/${sessionId}/cancel`)
-        .catch(() => undefined);
-    }
-    this.overlayWindow?.destroy();
+    // Release the full-screen input surface before contacting the service.
+    // A stalled backend must never make the user's desktop unusable.
+    this.destroyOverlay();
     if (closePreview) this.previewWindow?.destroy();
     else {
       this.previewWindow?.destroy();
       this.previewWindow = null;
+    }
+    if (sessionId) {
+      this.api
+        .post(`/sessions/${sessionId}/cancel`, undefined, {
+          timeout: SELECTION_REQUEST_TIMEOUT_MS,
+        })
+        .catch((error) =>
+          log.debug('[Visual Copilot] session cancellation failed', error),
+        );
     }
   }
 
