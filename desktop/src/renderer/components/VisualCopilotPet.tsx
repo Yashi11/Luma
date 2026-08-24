@@ -12,7 +12,7 @@ export default function VisualCopilotPet() {
         Select with Coco
       </div>
       <div className="visual-copilot-pet__sprite">
-        <PetSprite mood="idle" />
+        <PetSprite mood="idle" variant="luma" />
         <span className="visual-copilot-pet__badge" aria-hidden>
           <span />
         </span>

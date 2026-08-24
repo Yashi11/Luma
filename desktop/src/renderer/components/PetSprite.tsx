@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import petIdle1 from '../../../assets/pet1.png';
+import lumaFace from '../../../assets/luma-face.png';
 import sleep1 from '../../../assets/sleep1.png';
 import sleep2 from '../../../assets/sleep2.png';
 import sleep3 from '../../../assets/sleep3.png';
@@ -47,7 +48,13 @@ const FPS: Record<Exclude<PetMood, 'dormant' | 'idle'>, number> = {
 const isStatic = (m: PetMood): m is 'dormant' | 'idle' =>
   m === 'dormant' || m === 'idle';
 
-export default function PetSprite({ mood }: { mood: PetMood }) {
+export default function PetSprite({
+  mood,
+  variant = 'legacy',
+}: {
+  mood: PetMood;
+  variant?: 'legacy' | 'luma';
+}) {
   const [frame, setFrame] = useState(0);
 
   useEffect(() => {
@@ -65,6 +72,18 @@ export default function PetSprite({ mood }: { mood: PetMood }) {
     }, intervalMs);
     return () => clearInterval(id);
   }, [mood]);
+
+  if (variant === 'luma') {
+    return (
+      <img
+        id="pet-image"
+        src={lumaFace}
+        alt="Luma desktop companion"
+        draggable={false}
+        className="pet-image pet-image-luma"
+      />
+    );
+  }
 
   const src = isStatic(mood) ? STATIC_FRAMES[mood] : FRAMES[mood][frame];
   // pet1.png has a substantially wider non-transparent drawing than the sleep
