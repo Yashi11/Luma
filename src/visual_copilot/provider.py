@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -34,7 +35,18 @@ class VisionProvider(Protocol):
     def explain_selection(self, request: StrictOutboundRequest) -> Explanation: ...
 
 
-CONTEXT_NUDGE = "Got it. Want to add any context before I explain it?"
+CONTEXT_NUDGES = (
+    "I’ve got the selected area. Is there anything specific you want me to look for?",
+    "I’m looking at this part of the screen now. Want to add any context?",
+    "The screenshot is ready. What should I pay special attention to?",
+    "I have the selected region. Tell me what you’d like explained.",
+)
+CONTEXT_NUDGE = CONTEXT_NUDGES[0]
+
+
+def context_nudge_for(session_id: str) -> str:
+    """Choose one nudge consistently for the lifetime of a capture session."""
+    return CONTEXT_NUDGES[uuid.UUID(session_id).int % len(CONTEXT_NUDGES)]
 SYSTEM_INSTRUCTION = (
     "You are Visual Copilot in a conversation about one user-selected screenshot. "
     "Ground every answer in those selected pixels and the conversation history. "

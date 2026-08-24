@@ -11,7 +11,7 @@ from uuid import uuid4
 from .capture import InMemoryRegionCapture, RegionCapture
 from .geometry import DisplaySnapshot, Freeform, Point, Rectangle, Selection
 from .privacy import StrictOutboundRequest
-from .provider import Explanation, VisionProvider
+from .provider import Explanation, VisionProvider, context_nudge_for
 from .session import SelectionSession
 
 
@@ -57,8 +57,14 @@ class LocalSelectionService:
         display = parse_display_snapshot(display_payload)
         session_id = str(uuid4())
         with self._lock:
-            self._sessions[session_id] = SelectionSession(display)
+            self._sessions[session_id] = SelectionSession(
+                display,
+                context_nudge_for(session_id),
+            )
         return session_id
+
+    def context_nudge(self, token: str, session_id: str) -> str:
+        return self._session(token, session_id).context_nudge
 
     def freeze(self, token: str, session_id: str, selection_payload: Mapping[str, object]) -> dict:
         context = self._session(token, session_id).freeze_geometry(

@@ -26,7 +26,7 @@ from websockets.exceptions import ConnectionClosed
 
 from visual_copilot.capture import MssRegionCapture
 from visual_copilot.geometry import DisplaySnapshot
-from visual_copilot.provider import CONTEXT_NUDGE, OpenAIVisionProvider, VoiceControl
+from visual_copilot.provider import OpenAIVisionProvider, VoiceControl
 from visual_copilot.service import LocalSelectionService, parse_display_snapshot
 from visual_copilot.voice import (
     DeepgramStreamingTranscriber,
@@ -313,13 +313,14 @@ async def _queue_text(queue: asyncio.Queue[str | None]) -> AsyncIterator[str]:
         yield item
 
 
-async def _nudge_text() -> AsyncIterator[str]:
-    yield CONTEXT_NUDGE
+async def _nudge_text(text: str) -> AsyncIterator[str]:
+    yield text
 
 
 async def _stream_nudge(
     websocket: WebSocket,
     synthesizer: ElevenLabsStreamingSynthesizer,
+    text: str,
 ) -> None:
     async def send_audio(audio: str) -> None:
         try:
@@ -338,8 +339,8 @@ async def _stream_nudge(
             }
         )
 
-    await websocket.send_json({"type": "nudge_start", "text": CONTEXT_NUDGE})
-    await synthesizer.stream(_nudge_text(), send_audio)
+    await websocket.send_json({"type": "nudge_start", "text": text})
+    await synthesizer.stream(_nudge_text(text), send_audio)
     await websocket.send_json({"type": "nudge_complete"})
 
 
@@ -684,7 +685,11 @@ def create_app() -> FastAPI:
         try:
             if service.state(supplied, session_id) != "captured":
                 raise ValueError("context nudge is not available in this session state")
-            await _stream_nudge(websocket, synthesizer)
+            await _stream_nudge(
+                websocket,
+                synthesizer,
+                service.context_nudge(supplied, session_id),
+            )
             LOGGER.info("Context nudge stream completed")
         except WebSocketDisconnect:
             return

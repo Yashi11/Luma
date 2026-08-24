@@ -30,7 +30,7 @@ class InvalidTransition(RuntimeError):
 
 
 class SelectionSession:
-    def __init__(self, display: DisplaySnapshot):
+    def __init__(self, display: DisplaySnapshot, context_nudge: str = CONTEXT_NUDGE):
         display.validate()
         self.display = display
         self.state = SessionState.ACTIVE
@@ -39,7 +39,8 @@ class SelectionSession:
         self.request: StrictOutboundRequest | None = None
         self.result: Explanation | None = None
         self.error: str | None = None
-        self.conversation: list[ConversationTurn] = [ConversationTurn("assistant", CONTEXT_NUDGE)]
+        self.context_nudge = context_nudge
+        self.conversation: list[ConversationTurn] = [ConversationTurn("assistant", context_nudge)]
         self._pending_question: str | None = None
         self._lock = RLock()
 

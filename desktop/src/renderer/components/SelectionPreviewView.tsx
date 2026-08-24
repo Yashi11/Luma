@@ -38,7 +38,8 @@ type VoiceEvent = {
   sample_rate?: number;
 };
 
-const CONTEXT_NUDGE = 'Got it. Want to add any context before I explain it?';
+const DEFAULT_CONTEXT_NUDGE =
+  'I’ve got the selected area. What would you like me to look for?';
 
 export default function SelectionPreviewView() {
   const [state, setState] = useState<PreviewState>({ status: 'preview' });
@@ -46,11 +47,13 @@ export default function SelectionPreviewView() {
   const [streamAnswer, setStreamAnswer] = useState('');
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [voiceError, setVoiceError] = useState('');
+  const [contextNudge, setContextNudge] = useState(DEFAULT_CONTEXT_NUDGE);
   const [muted, setMuted] = useState(false);
   const recorderRef = useRef<ActiveVoiceRecorder | null>(null);
   const pcmPlayerRef = useRef(new PcmStreamPlayer());
   const audioReceivedRef = useRef(false);
   const nudgeActiveRef = useRef(true);
+  const contextNudgeRef = useRef(DEFAULT_CONTEXT_NUDGE);
   const beginVoiceRef = useRef<() => Promise<void>>(async () => {});
   const startBargeMonitorRef = useRef<() => Promise<void>>(async () => {});
   const setMutedRef = useRef<(nextMuted: boolean) => Promise<void>>(
@@ -101,7 +104,10 @@ export default function SelectionPreviewView() {
       'selection-voice-event',
       (payload) => {
         const event = payload as VoiceEvent;
-        if (
+        if (event.type === 'nudge_start' && typeof event.text === 'string') {
+          contextNudgeRef.current = event.text;
+          setContextNudge(event.text);
+        } else if (
           event.type === 'nudge_audio_chunk' &&
           typeof event.audio === 'string' &&
           nudgeActiveRef.current
@@ -111,7 +117,7 @@ export default function SelectionPreviewView() {
             typeof event.sample_rate === 'number' ? event.sample_rate : 24_000,
           );
         } else if (event.type === 'nudge_error' && nudgeActiveRef.current) {
-          speakAnswer(CONTEXT_NUDGE, () => {
+          speakAnswer(contextNudgeRef.current, () => {
             if (!nudgeActiveRef.current || mutedRef.current) return;
             nudgeActiveRef.current = false;
             beginVoiceRef.current().catch(() => undefined);
@@ -524,7 +530,7 @@ export default function SelectionPreviewView() {
               <span className="selection-question__label">
                 I’ve got the screenshot
               </span>
-              <p className="selection-context-nudge">{CONTEXT_NUDGE}</p>
+              <p className="selection-context-nudge">{contextNudge}</p>
               <div
                 className={`selection-live-state${
                   voiceActive ? ' selection-live-state--active' : ''

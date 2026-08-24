@@ -73,6 +73,17 @@ class ServiceTests(unittest.TestCase):
         self.assertIsNone(self.service._sessions[session_id].crop)
         self.assertIsNone(self.service._sessions[session_id].request)
 
+    def test_context_nudge_is_selected_per_session_and_saved_in_history(self):
+        first = self.service.activate(self.token, self.display_payload)
+        second = self.service.activate(self.token, self.display_payload)
+        first_nudge = self.service.context_nudge(self.token, first)
+        second_nudge = self.service.context_nudge(self.token, second)
+
+        self.assertIn(first_nudge, self.service._sessions[first].conversation[0].text)
+        self.assertIn(second_nudge, self.service._sessions[second].conversation[0].text)
+        self.assertTrue(first_nudge)
+        self.assertTrue(second_nudge)
+
     def test_invalid_token_and_cancel_prevent_send(self):
         with self.assertRaises(PermissionError):
             self.service.activate("wrong", self.display_payload)
