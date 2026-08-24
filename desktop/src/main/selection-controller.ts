@@ -771,7 +771,7 @@ export default class SelectionController {
       const detail = error.response?.data?.detail;
       if (typeof detail === 'string') return detail;
       if (error.code === 'ECONNREFUSED')
-        return 'Selection service is unavailable.';
+        return "Luma's selection service is unavailable. Open Luma Settings and configure an OpenAI vision model and API key, then try again.";
     }
     if (typeof error === 'string' && error.trim()) return error;
     if (

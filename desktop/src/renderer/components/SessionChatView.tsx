@@ -1478,7 +1478,7 @@ export default function SessionChatView() {
 
   // Context from proactive support. Ordinary "Help me with this" requests are
   // sent immediately; "Chat about it" stages context for the next message; and
-  // "Open Coco Chat" places a delegation prompt directly in the composer.
+  // "Open Luma Chat" places a delegation prompt directly in the composer.
   useEffect(() => {
     const cleanup = window.electron?.ipcRenderer.on('help-request', (data: any) => {
       const {
@@ -1736,7 +1736,7 @@ export default function SessionChatView() {
   if (voiceState === 'requesting') {
     voiceStatusText = 'Requesting microphone access…';
   } else if (voiceState === 'speaking') {
-    voiceStatusText = 'Listening… Coco will send after you stop speaking.';
+    voiceStatusText = 'Listening… Luma will send after you stop speaking.';
   } else if (voiceState === 'listening') {
     voiceStatusText = 'Listening… start speaking, or press stop to send.';
   }
@@ -1817,7 +1817,7 @@ export default function SessionChatView() {
           ? 'success'
           : 'muted';
   const chatHealthTitle = cocoSleeping
-    ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
+    ? 'Luma is asleep. Service health checks are paused until Luma wakes.'
     : serviceUnavailable
       ? [
           visualCopilotOnly ? 'Visual Copilot service is not reachable.' : '',
@@ -1860,7 +1860,7 @@ export default function SessionChatView() {
             style={S.statusDot}
             title={chatHealthTitle}
           />
-          Coco
+          Luma
           {hasChatHealthIssue ? (
             <button
               type="button"
@@ -1961,10 +1961,10 @@ export default function SessionChatView() {
           <div style={S.groupLabel}>Health</div>
           <div style={S.helpText}>
             {cocoSleeping
-              ? 'Coco is asleep. Service health checks are paused until Coco wakes.'
+              ? 'Luma is asleep. Service health checks are paused until Luma wakes.'
               : visualCopilotMode
                 ? 'Checks the authenticated local selection service. OpenAI is contacted only after you explicitly send a selected region.'
-                : "Checks Coco's local services and sends short real requests to the configured models. The sensing test includes a small test image."}
+                : "Checks Luma's local services and sends short real requests to the configured models. The sensing test includes a small test image."}
           </div>
           {cocoSleeping && (
             <div role="status" style={S.healthDetail}>
@@ -2085,15 +2085,15 @@ export default function SessionChatView() {
               }
             />
             <span>
-              <span style={S.healthName}>Listen for Coco</span>
+              <span style={S.healthName}>Listen for Luma</span>
               <span style={{ ...S.healthDetail, display: 'block' }}>
-                Detects “Coco”, “Hi Coco”, and “Hey Coco”.
+                Detects “Luma”, “Hi Luma”, and “Hey Luma”.
               </span>
             </span>
           </label>
           <div style={S.helpText}>
             Audio is analyzed continuously by a small local model and discarded.
-            Coco pauses listening while asleep and while recording a voice message.
+            Luma pauses listening while asleep and while recording a voice message.
           </div>
           {wakeWordEnabled && (
             <div
@@ -2112,11 +2112,13 @@ export default function SessionChatView() {
                 : wakeWordStatus === 'error'
                   ? wakeWordDetail || 'The local wake-word model could not start.'
                   : cocoSleeping || wakeWordStatus === 'sleeping'
-                    ? 'Paused while Coco is asleep.'
+                    ? 'Paused while Luma is asleep.'
                     : wakeWordStatus === 'starting'
                       ? 'Starting the local detector…'
                       : 'Listening locally.'}
             </div>
+          )}
+            </>
           )}
           <div style={S.sectionDivider} />
 
@@ -2371,8 +2373,6 @@ export default function SessionChatView() {
                 </div>
               )}
               <div style={S.sectionDivider} />
-            </>
-          )}
           <div style={S.groupLabel}>Desktop</div>
           <label style={S.toggleRow} htmlFor="hide-desktop-avatar">
             <input
@@ -2385,7 +2385,7 @@ export default function SessionChatView() {
             <span>
               <strong style={S.toggleTitle}>Hide desktop avatar</strong>
               <span style={S.toggleHelp}>
-                Keep Coco in the system tray and show proactive suggestions as
+                Keep Luma in the system tray and show proactive suggestions as
                 notifications.
               </span>
             </span>
@@ -2515,8 +2515,8 @@ export default function SessionChatView() {
 
           <div style={S.groupLabel}>Memory</div>
           <div style={S.helpText}>
-            Long-term notes Coco keeps about you — preferences, recurring tasks,
-            and what has worked before. Coco reads this every session; edit it
+            Long-term notes Luma keeps about you — preferences, recurring tasks,
+            and what has worked before. Luma reads this every session; edit it
             freely.
           </div>
           <textarea
@@ -2612,7 +2612,7 @@ export default function SessionChatView() {
           <div style={S.list} ref={listRef}>
         {visibleMessages.length === 0 && !sending && (
           <div style={S.empty}>
-            Ask Coco about your task, an AI tool, or anything else.
+            Ask Luma about your task, an AI tool, or anything else.
             <br />
             You can paste a screenshot to show what you&apos;re working on.
           </div>
@@ -2744,7 +2744,7 @@ export default function SessionChatView() {
           </div>
         ))}
         {sending && !hasRunningTool && (
-          <div style={S.typing}>Coco is thinking…</div>
+          <div style={S.typing}>Luma is thinking…</div>
         )}
       </div>
 
@@ -2836,7 +2836,7 @@ export default function SessionChatView() {
               voiceActive ? 'Stop voice recording' : 'Start voice recording'
             }
             title={
-              voiceActive ? 'Stop and send voice message' : 'Talk to Coco'
+              voiceActive ? 'Stop and send voice message' : 'Talk to Luma'
             }
             style={{
               ...S.micBtn,
