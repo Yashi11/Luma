@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { encodeCustomChatbot, encodeCustomAgent } from './observation-types';
 import './OnboardingView.css';
-import foxWorking from '../../../assets/pet1.png';
-import foxWaiting from '../../../assets/wait1.png';
+import lumaFace from '../../../assets/luma-face.png';
+import lumaFaceActive from '../../../assets/luma-face-active.png';
 import studentLearningIcon from '../../../assets/student_learning.png';
 import everydaySupportIcon from '../../../assets/everyday_support.png';
 import customModeIcon from '../../../assets/custom.png';
@@ -166,7 +166,7 @@ function StepModels({
   };
   return (
     <>
-      <div className="ob-title">Connect Coco to your models</div>
+      <div className="ob-title">Connect Luma to your models</div>
       <div className="ob-sub">
         The sensing model reads your screen to detect when help may be useful
         and curate context. Tutor models generate proactive suggestions and
@@ -225,13 +225,13 @@ const MODES = [
   {
     id: 'student_learning',
     name: 'Student Learning',
-    desc: 'Coco acts as an AI Tutor — guiding you to learn and solve problems yourself with hints, not answers.',
+    desc: 'Luma acts as an AI Tutor — guiding you to learn and solve problems yourself with hints, not answers.',
     img: studentLearningIcon,
   },
   {
     id: 'everyday_support',
     name: 'Everyday Support',
-    desc: 'Coco acts as an AI Assistant — spotting tasks worth delegating and suggesting the right AI tool to do them.',
+    desc: 'Luma acts as an AI Assistant — spotting tasks worth delegating and suggesting the right AI tool to do them.',
     img: everydaySupportIcon,
   },
 ];
@@ -252,7 +252,7 @@ const AI_AGENTS = [
   { id: 'opencode', label: 'OpenCode' },
 ];
 
-// Prompt for the "Custom" mode. This is Coco's SENSING (observer) prompt —
+// Prompt for the "Custom" mode. This is Luma's SENSING (observer) prompt —
 // what it watches for and when it decides to step in. Only the role/intro is
 // user-editable; the input contract and JSON output schema below ("You will
 // receive the following input blocks:" onward) are fixed because the sensing
@@ -310,29 +310,29 @@ Output in JSON format:
 function Step0() {
   return (
     <>
-      <div className="ob-title">Meet Coco, your proactive co-assistant</div>
+      <div className="ob-title">Meet Luma, your proactive co-assistant</div>
       <p className="ob-stat-copy">
-        Coco works alongside you — it understands your{' '}
+        Luma works alongside you — it understands your{' '}
         <strong>full working context</strong> and steps in with the right help,
         right when you need it.
       </p>
       <div className="ob-info-rows">
         <div className="ob-info-row">
           <img
-            src={foxWorking}
+            src={lumaFaceActive}
             alt=""
             className="ob-info-icon"
             style={{ width: 40, height: 40, objectFit: 'contain', flexShrink: 0 }}
           />
           <div className="ob-info-text">
-            <strong>A co-assistant, not a replacement.</strong> Coco supports
+            <strong>A co-assistant, not a replacement.</strong> Luma supports
             your work and helps you get better at using AI — you stay in the
             driver&apos;s seat.
           </div>
         </div>
         <div className="ob-info-row">
           <img
-            src={foxWaiting}
+            src={lumaFace}
             alt=""
             className="ob-info-icon"
             style={{ width: 40, height: 40, objectFit: 'contain', flexShrink: 0 }}
@@ -355,9 +355,9 @@ function Step3() {
 
   return (
     <>
-      <div className="ob-title">Two ways Coco can support</div>
+      <div className="ob-title">Two ways Luma can support</div>
       <div className="ob-sub">
-        Coco can reach out proactively when it spots a good moment, or you can
+        Luma can reach out proactively when it spots a good moment, or you can
         ask it directly whenever you like.
       </div>
 
@@ -374,20 +374,20 @@ function Step3() {
           className={`ob-tab ${activeMethod === 'direct' ? 'active' : 'inactive'}`}
           onClick={() => setActiveMethod('direct')}
         >
-          ② Ask Coco directly
+          ② Ask Luma directly
         </button>
       </div>
 
       {activeMethod === 'direct' && (
         <div className="ob-direct-flow">
 
-          {/* Click the Coco avatar on the desktop */}
-          <div className="ob-direct-step-label">Click the Coco avatar on your desktop</div>
+          {/* Click the Luma avatar on the desktop */}
+          <div className="ob-direct-step-label">Click the Luma avatar on your desktop</div>
           <div className="ob-direct-panel">
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: '#f3f4f6' }}>
-              <img src={foxWorking} alt="Coco avatar" style={{ width: 44, height: 44, objectFit: 'contain' }} />
+              <img src={lumaFaceActive} alt="Luma avatar" style={{ width: 44, height: 44, objectFit: 'contain' }} />
               <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#1f2937' }}>Coco</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#1f2937' }}>Luma</div>
                 <div style={{ fontSize: 9.5, color: '#9ca3af' }}>Click the avatar to open the chat</div>
               </div>
             </div>
@@ -424,10 +424,10 @@ function Step3() {
               marginBottom: 8,
             }}
           >
-            {/* Coco avatar — the bubble pops up right next to it */}
+            {/* Luma avatar — the bubble pops up right next to it */}
             <img
-              src={foxWorking}
-              alt="Coco avatar"
+              src={lumaFaceActive}
+              alt="Luma avatar"
               style={{ width: 56, height: 56, objectFit: 'contain', flexShrink: 0 }}
             />
             {/* Mini pop-up bubble — how proactive support is delivered */}
@@ -454,7 +454,7 @@ function Step3() {
             </div>
           </div>
           <div className="ob-method-note">
-            Work as usual — Coco watches your context in the background. When it
+            Work as usual — Luma watches your context in the background. When it
             spots a moment worth mentioning, a <strong>pop-up bubble</strong>{' '}
             appears with its suggestion. Tap it to see more, or dismiss it and
             keep going.
@@ -470,17 +470,17 @@ function Step4() {
     <>
       <div className="ob-title">Ask anything, any time</div>
       <div className="ob-sub">
-        Use the chat box during a session to ask Coco about your task, AI tools,
+        Use the chat box during a session to ask Luma about your task, AI tools,
         or anything else. Type and press Enter to send.
       </div>
       <div className="ob-chat">
         <div className="ob-chat-header">
           <div className="ob-chat-status" />
-          Coco · Session active
+          Luma · Session active
         </div>
         <div className="ob-chat-msgs">
           <div className="ob-msg ai">
-            <div className="ob-msg-who">Coco</div>
+            <div className="ob-msg-who">Luma</div>
             <div className="ob-msg-bubble">
               Noticed you&apos;ve been on this section a while — want a hint?
             </div>
@@ -490,7 +490,7 @@ function Step4() {
             <div className="ob-msg-bubble">help me with this paragraph</div>
           </div>
           <div className="ob-msg ai">
-            <div className="ob-msg-who">Coco</div>
+            <div className="ob-msg-who">Luma</div>
             <div className="ob-msg-bubble">
               Try asking Claude to rewrite it with a stronger opening sentence…
             </div>
@@ -522,9 +522,9 @@ function StepMode({
 }) {
   return (
     <>
-      <div className="ob-title">How should Coco support you?</div>
+      <div className="ob-title">How should Luma support you?</div>
       <div className="ob-sub">
-        Pick the mode Coco starts in. You can switch anytime from the chat box.
+        Pick the mode Luma starts in. You can switch anytime from the chat box.
       </div>
       {MODES.map((m) => (
         <div
@@ -567,7 +567,7 @@ function StepMode({
         <div>
           <div className="ob-path-title">Custom</div>
           <div className="ob-path-desc" style={{ marginBottom: 0 }}>
-            Write your own instructions for how Coco should support you.
+            Write your own instructions for how Luma should support you.
           </div>
         </div>
       </div>
@@ -575,9 +575,9 @@ function StepMode({
       {selectedMode === 'custom' && (
         <>
           <div className="ob-sub" style={{ marginTop: 10, marginBottom: 4 }}>
-            Describe what Coco should watch for and when it should step in.
+            Describe what Luma should watch for and when it should step in.
             We&apos;ve pre-filled the Everyday Support prompt as a starting
-            point — tweak it to fit the moments you want Coco to notice.
+            point — tweak it to fit the moments you want Luma to notice.
           </div>
           <textarea
             className="ob-custom-goal"
@@ -596,7 +596,7 @@ function StepMode({
               fontWeight: 700,
             }}
           >
-            🔒 Fixed — required by Coco&apos;s sensing pipeline
+            🔒 Fixed — required by Luma&apos;s sensing pipeline
           </div>
           <div
             style={{
@@ -660,7 +660,7 @@ function Step6({
     <>
       <div className="ob-title">Your AI toolkit</div>
       <div className="ob-sub">
-        Which AI tools do you have access to? Select all that apply — Coco also delegates to them when needed.
+        Which AI tools do you have access to? Select all that apply — Luma also delegates to them when needed.
       </div>
 
       <div className="ob-tool-group">
@@ -704,7 +704,7 @@ function Step6({
             <textarea
               className="ob-custom-input"
               rows={2}
-              placeholder="Description — what it's good at, so Coco knows when to suggest it"
+              placeholder="Description — what it's good at, so Luma knows when to suggest it"
               value={customChatbotDesc}
               onChange={(e) => setCustomChatbotDesc(e.target.value)}
             />
@@ -747,7 +747,7 @@ function Step6({
             <textarea
               className="ob-custom-input"
               rows={2}
-              placeholder="Description — what it does, so Coco knows when to suggest it"
+              placeholder="Description — what it does, so Luma knows when to suggest it"
               value={customAgentDesc}
               onChange={(e) => setCustomAgentDesc(e.target.value)}
             />
@@ -787,9 +787,9 @@ function StepMemory({
 
   return (
     <>
-      <div className="ob-title">Give Coco a head start</div>
+      <div className="ob-title">Give Luma a head start</div>
       <div className="ob-sub">
-        Tell Coco what to call you, then optionally share context to remember
+        Tell Luma what to call you, then optionally share context to remember
         across sessions.
       </div>
 
@@ -814,7 +814,7 @@ function StepMemory({
         className="ob-memory-input"
         rows={7}
         value={memory}
-        placeholder="What should Coco know about you?"
+          placeholder="What should Luma know about you?"
         onChange={(event) => setMemory(event.target.value)}
       />
 
@@ -871,7 +871,7 @@ function Step8({
   return (
     <>
       <div className="ob-title">You&apos;re all set 🎉</div>
-      <div className="ob-sub">Here&apos;s how Coco is set up for you:</div>
+      <div className="ob-sub">Here&apos;s how Luma is set up for you:</div>
 
       <div className="ob-divider" />
 
@@ -920,7 +920,7 @@ function Step8({
       <div className="ob-divider" />
 
       <p className="ob-summary-note">
-        Coco will coach you in context, when it spots a moment worth mentioning.
+        Luma will coach you in context, when it spots a moment worth mentioning.
         You can update these settings anytime from the app menu.
       </p>
     </>
@@ -1124,7 +1124,7 @@ export default function OnboardingView() {
     }
     if (currentKey === 'memory') {
       if (!userName.trim()) {
-        setMemoryError('Enter the name you want Coco to use.');
+        setMemoryError('Enter the name you want Luma to use.');
         return;
       }
       setSavingMemory(true);
@@ -1294,8 +1294,8 @@ export default function OnboardingView() {
               disabled={savingModels}
             >
               {modelsOnly
-                ? (savingModels ? 'Saving…' : 'Save & start Coco 🐾')
-                : 'Start Coco 🐾'}
+                ? (savingModels ? 'Saving…' : 'Save & start Luma 🐾')
+                : 'Start Luma 🐾'}
             </button>
           ) : (
             <button
@@ -1321,7 +1321,7 @@ export default function OnboardingView() {
             <div className="ob-modal">
               <div className="ob-modal-title">Want to proceed?</div>
               <div className="ob-modal-body">
-                We suggest selecting at least one <strong>chatbot</strong> and one <strong>agent</strong> so Coco can coach you on different types of tasks.
+                We suggest selecting at least one <strong>chatbot</strong> and one <strong>agent</strong> so Luma can coach you on different types of tasks.
               </div>
               <div className="ob-modal-actions">
                 <button

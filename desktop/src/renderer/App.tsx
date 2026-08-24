@@ -1076,7 +1076,7 @@ function PetView() {
         />
       )}
       <div ref={petActionsRef} className="pet-container">
-        <PetSprite mood={cocoSleeping ? 'sleep' : mood} />
+        <PetSprite mood={cocoSleeping ? 'sleep' : mood} variant="luma" active={mood !== 'idle' && mood !== 'dormant'} />
         <button
           type="button"
           className="open-button"
