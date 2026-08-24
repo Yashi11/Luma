@@ -628,6 +628,20 @@ const showChatPanel = () => {
   }
 };
 
+const minimizeChatPanel = () => {
+  if (!chatWindow || chatWindow.isDestroyed()) return;
+  chatWindow.hide();
+  if (hideAvatarMode) return;
+  if (!avatarWindow || avatarWindow.isDestroyed()) createAvatarWindow();
+  else avatarWindow.showInactive();
+};
+
+ipcMain.removeAllListeners('minimize-chat-window');
+ipcMain.on('minimize-chat-window', (event) => {
+  if (!chatWindow || event.sender !== chatWindow.webContents) return;
+  minimizeChatPanel();
+});
+
 const openImagePreviewWindow = (
   sourceWindow: BrowserWindow | null,
   imageDataUrl: string,
@@ -2118,6 +2132,11 @@ ipcMain.on('selection-activate', (event) => {
     event.sender !== avatarWindow?.webContents
   )
     return;
+  if (chatWindow && !chatWindow.isDestroyed() && chatWindow.isVisible()) {
+    log.info('[Visual Copilot] Coco clicked; minimizing text panel');
+    minimizeChatPanel();
+    return;
+  }
   if (selectionController?.showPreviewIfAvailable()) {
     log.info('[Visual Copilot] Panel opened by explicit Coco click');
     return;

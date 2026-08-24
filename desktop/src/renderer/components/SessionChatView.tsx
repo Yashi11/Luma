@@ -1916,6 +1916,17 @@ export default function SessionChatView() {
           <button
             type="button"
             style={S.iconBtn}
+            title="Minimize text panel"
+            aria-label="Minimize text panel"
+            onClick={() =>
+              window.electron?.ipcRenderer.sendMessage('minimize-chat-window')
+            }
+          >
+            −
+          </button>
+          <button
+            type="button"
+            style={S.iconBtn}
             title={expanded ? 'Collapse' : 'Expand'}
             onClick={() => {
               setExpanded((v) => !v);

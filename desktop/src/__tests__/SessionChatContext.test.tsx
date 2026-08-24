@@ -9,6 +9,22 @@ import {
 import SessionChatView from '../renderer/components/SessionChatView';
 
 describe('deferred suggestion context', () => {
+  it('minimizes the text panel without closing the chat window', () => {
+    const sendMessage = jest.fn();
+    (window as any).electron = {
+      ipcRenderer: {
+        on: jest.fn(() => jest.fn()),
+        sendMessage,
+        invoke: jest.fn(async () => null),
+      },
+    };
+
+    render(<SessionChatView />);
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize text panel' }));
+
+    expect(sendMessage).toHaveBeenCalledWith('minimize-chat-window');
+  });
+
   it('shows editable model settings when no saved configuration is available', async () => {
     (window as any).electron = {
       ipcRenderer: {

@@ -22,6 +22,7 @@ export type Channels =
   | 'select-file-or-directory'
   | 'set-user-id'
   | 'toggle-float-window'
+  | 'minimize-chat-window'
   | 'float-window-state'
   | 'get-chat-content-zoom-factor'
   | 'chat-content-zoom-factor'
