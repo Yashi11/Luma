@@ -34,6 +34,7 @@ from visual_copilot.voice import (
 )
 
 LOGGER = logging.getLogger("uvicorn.error")
+NO_SPEECH_FALLBACK = "Explain what is shown in the selected region."
 
 
 @dataclass(frozen=True)
@@ -633,7 +634,19 @@ def create_app() -> FastAPI:
                 "failed",
             }:
                 raise ValueError("voice question is not available in this session state")
-            transcript = await _receive_pcm_transcript(websocket, transcriber)
+            try:
+                transcript = await _receive_pcm_transcript(websocket, transcriber)
+            except RuntimeError as exc:
+                # A voice turn is still useful when the user was silent or the
+                # STT provider could not produce a transcript: fall back to a
+                # visual explanation instead of turning the selection into an
+                # error state.
+                if "did not detect any speech" not in str(exc):
+                    raise
+                transcript = NO_SPEECH_FALLBACK
+                await websocket.send_json(
+                    {"type": "transcript", "text": transcript, "final": True}
+                )
             request = service.begin_stream(supplied, session_id, transcript)
             await websocket.send_json({"type": "llm_start", "transcript": transcript})
             result = await _stream_answer(websocket, provider, synthesizer, request)
