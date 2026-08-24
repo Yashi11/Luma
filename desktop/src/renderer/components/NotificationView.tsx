@@ -227,7 +227,7 @@ export function NotificationBubble({
       <div className="toast-header">
         <div className="toast-brand">
           <span className="toast-brand-dot" />
-          <span className="toast-brand-name">Coco</span>
+          <span className="toast-brand-name">Luma</span>
         </div>
         <div className="toast-header-actions">
           {adjustable && !isSuggestionPreview && (
@@ -310,7 +310,7 @@ export function NotificationBubble({
             onClick={onOpenCocoChat}
             autoFocus
           >
-            Open Coco Chat
+            Open Luma Chat
           </button>
           <button
             type="button"

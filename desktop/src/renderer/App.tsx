@@ -1084,7 +1084,7 @@ function PetView() {
           title="Open the chat"
           aria-label="Open the chat"
         >
-          <span aria-hidden>Open Coco</span>
+          <span aria-hidden>Open Luma</span>
         </button>
 
         <button
@@ -1107,7 +1107,7 @@ function PetView() {
           <div
             className="pet-actions-menu"
             role="menu"
-            aria-label="Coco actions"
+            aria-label="Luma actions"
           >
             <button
               type="button"
@@ -1119,7 +1119,7 @@ function PetView() {
               }}
             >
               <PetMenuIcon name={cocoSleeping ? 'wake' : 'sleep'} />
-              <span>{cocoSleeping ? 'Wake Coco' : 'Sleep'}</span>
+                <span>{cocoSleeping ? 'Wake Luma' : 'Sleep'}</span>
             </button>
             <button
               type="button"

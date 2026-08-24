@@ -262,7 +262,7 @@ export default function ObservationBubble({
             onClick={onOpenCocoChat}
             autoFocus
           >
-            Open Coco Chat
+            Open Luma Chat
           </button>
           <button
             type="button"
