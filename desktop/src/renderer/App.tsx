@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { MemoryRouter as Router, Routes, Route } from 'react-router-dom';
 import './App.css';
 import ObservationBubble, {
@@ -491,6 +491,36 @@ function PetView() {
   const [cocoSleeping, setCocoSleeping] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const petActionsRef = useRef<HTMLDivElement | null>(null);
+  const avatarDragRef = useRef<{ x: number; y: number } | null>(null);
+
+  const moveAvatar = useCallback((event: PointerEvent) => {
+    const previous = avatarDragRef.current;
+    if (!previous) return;
+    const deltaX = event.screenX - previous.x;
+    const deltaY = event.screenY - previous.y;
+    avatarDragRef.current = { x: event.screenX, y: event.screenY };
+    if (deltaX || deltaY) {
+      window.electron?.ipcRenderer.sendMessage('move-avatar-window', { deltaX, deltaY });
+    }
+  }, []);
+
+  const stopAvatarDrag = useCallback(() => {
+    avatarDragRef.current = null;
+    window.removeEventListener('pointermove', moveAvatar);
+    window.removeEventListener('pointerup', stopAvatarDrag);
+  }, [moveAvatar]);
+
+  const startAvatarDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('button')) return;
+    avatarDragRef.current = {
+      x: event.nativeEvent.screenX,
+      y: event.nativeEvent.screenY,
+    };
+    window.addEventListener('pointermove', moveAvatar);
+    window.addEventListener('pointerup', stopAvatarDrag, { once: true });
+  }, [moveAvatar, stopAvatarDrag]);
+
+  useEffect(() => stopAvatarDrag, [stopAvatarDrag]);
 
   // Use refs so listener captures the latest cleanup targets without
   // re-subscribing every render.
@@ -1075,7 +1105,7 @@ function PetView() {
           aria-hidden
         />
       )}
-      <div ref={petActionsRef} className="pet-container">
+      <div ref={petActionsRef} className="pet-container" onPointerDown={startAvatarDrag}>
         <PetSprite mood={cocoSleeping ? 'sleep' : mood} variant="luma" active={mood !== 'idle' && mood !== 'dormant'} />
         <button
           type="button"

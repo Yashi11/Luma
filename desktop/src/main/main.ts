@@ -2146,6 +2146,19 @@ ipcMain.on(
   },
 );
 
+ipcMain.removeAllListeners('move-avatar-window');
+ipcMain.on(
+  'move-avatar-window',
+  (_event, { deltaX, deltaY }: { deltaX?: number; deltaY?: number }) => {
+    if (!avatarWindow || avatarWindow.isDestroyed()) return;
+    const x = Number(deltaX);
+    const y = Number(deltaY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const [currentX, currentY] = avatarWindow.getPosition();
+    avatarWindow.setPosition(currentX + Math.round(x), currentY + Math.round(y));
+  },
+);
+
 ipcMain.removeAllListeners('activity-history-visibility');
 ipcMain.on(
   'activity-history-visibility',

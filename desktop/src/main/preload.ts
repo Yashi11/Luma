@@ -83,6 +83,7 @@ export type Channels =
   | 'activity-support-rated'
   // Renderer asks main to resize the avatar window to fit current content
   | 'resize-avatar-window'
+  | 'move-avatar-window'
   // Tier 3: tutor guidance routed to bubble when webapp is hidden
   | 'tutor-notification'
   // Tier 2: user clicked "Help me with this" in the bubble
