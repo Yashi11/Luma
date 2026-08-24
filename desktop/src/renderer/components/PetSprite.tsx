@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import petIdle1 from '../../../assets/pet1.png';
 import lumaFace from '../../../assets/luma-face.png';
+import lumaFaceActive from '../../../assets/luma-face-active.png';
 import sleep1 from '../../../assets/sleep1.png';
 import sleep2 from '../../../assets/sleep2.png';
 import sleep3 from '../../../assets/sleep3.png';
@@ -51,9 +52,11 @@ const isStatic = (m: PetMood): m is 'dormant' | 'idle' =>
 export default function PetSprite({
   mood,
   variant = 'legacy',
+  active = false,
 }: {
   mood: PetMood;
   variant?: 'legacy' | 'luma';
+  active?: boolean;
 }) {
   const [frame, setFrame] = useState(0);
 
@@ -77,10 +80,10 @@ export default function PetSprite({
     return (
       <img
         id="pet-image"
-        src={lumaFace}
+        src={active ? lumaFaceActive : lumaFace}
         alt="Luma desktop companion"
         draggable={false}
-        className="pet-image pet-image-luma"
+        className={`pet-image pet-image-luma${active ? ' pet-image-luma-active' : ''}`}
       />
     );
   }

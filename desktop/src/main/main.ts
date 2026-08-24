@@ -845,6 +845,14 @@ function showVisualCopilotPet(): void {
   avatarWindow.showInactive();
 }
 
+function notifyVisualCopilotChatActivity(active: boolean): void {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  avatarWindow.webContents.send('chat-stream-event', {
+    requestId: 'visual-copilot-chat-activity',
+    type: active ? 'activity_started' : 'activity_done',
+  });
+}
+
 function setupPending(): boolean {
   if (VISUAL_COPILOT_MODE) return false;
   return !isOnboardingComplete() || !readModelConfiguration();
@@ -2737,6 +2745,7 @@ ipcMain.handle(
     },
   ) => {
     const tutorPort = process.env.TUTOR_PORT || '8081';
+    notifyVisualCopilotChatActivity(true);
 
     // Persist any pasted images to temp files for the tutor's vision call.
     const imagePaths: string[] = [];
@@ -2789,6 +2798,9 @@ ipcMain.handle(
               ? { observerMetrics: streamEvent.observer_metrics ?? null }
               : {}),
           });
+          if (streamEvent.type === 'done' || streamEvent.type === 'error') {
+            notifyVisualCopilotChatActivity(false);
+          }
         },
         undefined,
         {
@@ -2812,6 +2824,7 @@ ipcMain.handle(
         type: 'error',
         error,
       });
+      notifyVisualCopilotChatActivity(false);
       return { error };
     }
   },
@@ -2879,6 +2892,7 @@ ipcMain.handle(
       return { error: 'The voice recording is empty or too large.' };
     }
     const tutorPort = process.env.TUTOR_PORT || '8081';
+    notifyVisualCopilotChatActivity(true);
     try {
       await consumeTutorStream(
         `http://127.0.0.1:${tutorPort}/events/audio_prompt/stream`,
@@ -2892,6 +2906,9 @@ ipcMain.handle(
             requestId,
             ...streamEvent,
           });
+          if (streamEvent.type === 'done' || streamEvent.type === 'error') {
+            notifyVisualCopilotChatActivity(false);
+          }
         },
         undefined,
         {
@@ -2914,6 +2931,7 @@ ipcMain.handle(
         type: 'error',
         error,
       });
+      notifyVisualCopilotChatActivity(false);
       return { error };
     }
   },

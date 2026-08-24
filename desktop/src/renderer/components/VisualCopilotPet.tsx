@@ -1,7 +1,23 @@
+import { useEffect, useState } from 'react';
+
 import PetSprite from './PetSprite';
 import './VisualCopilotPet.css';
 
 export default function VisualCopilotPet() {
+  const [chatActive, setChatActive] = useState(false);
+
+  useEffect(() => {
+    const on = window.electron?.ipcRenderer?.on;
+    if (typeof on !== 'function') return undefined;
+    const cleanup = on('chat-stream-event', (data: any) => {
+      if (!data?.requestId) return;
+      setChatActive(data.type !== 'done' && data.type !== 'error');
+    });
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
+  }, []);
+
   const startSelection = () => {
     window.electron?.ipcRenderer.sendMessage('selection-activate');
   };
@@ -12,7 +28,7 @@ export default function VisualCopilotPet() {
         Select with Coco
       </div>
       <div className="visual-copilot-pet__sprite">
-        <PetSprite mood="idle" variant="luma" />
+        <PetSprite mood="idle" variant="luma" active={chatActive} />
         <span className="visual-copilot-pet__badge" aria-hidden>
           <span />
         </span>
