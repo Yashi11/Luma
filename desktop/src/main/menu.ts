@@ -63,17 +63,17 @@ export default class MenuBuilder {
 
   buildDarwinTemplate(): MenuItemConstructorOptions[] {
     const subMenuAbout: DarwinMenuItemConstructorOptions = {
-      label: 'coco',
+      label: 'Luma',
       submenu: [
         {
-          label: 'About coco',
+          label: 'About Luma',
           selector: 'orderFrontStandardAboutPanel:',
         },
         { type: 'separator' },
         { label: 'Services', submenu: [] },
         { type: 'separator' },
         {
-          label: 'Hide coco',
+          label: 'Hide Luma',
           accelerator: 'Command+H',
           selector: 'hide:',
         },

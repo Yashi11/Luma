@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import VisualCopilotPet from '../renderer/components/VisualCopilotPet';
 
 describe('VisualCopilotPet', () => {
-  it('starts an explicit selection when Coco is clicked', () => {
+  it('starts an explicit selection when Luma is clicked', () => {
     const sendMessage = jest.fn();
     (window as any).electron = {
       ipcRenderer: {
@@ -13,7 +13,7 @@ describe('VisualCopilotPet', () => {
 
     render(<VisualCopilotPet />);
     fireEvent.click(
-      screen.getByRole('button', { name: 'Select an area with Coco' }),
+      screen.getByRole('button', { name: 'Select an area with Luma' }),
     );
 
     expect(sendMessage).toHaveBeenCalledWith('selection-activate');

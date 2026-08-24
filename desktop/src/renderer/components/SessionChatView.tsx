@@ -1236,6 +1236,10 @@ export default function SessionChatView() {
   const saveModelSettings = async () => {
     if (modelConfigLoading) return;
     setModelSaveError('');
+    if (visualCopilotMode && sensingModel.provider !== 'openai') {
+      setModelSaveError('Luma Visual Copilot currently requires an OpenAI vision model.');
+      return;
+    }
     if (!sensingModel.model.trim()) {
       setModelSaveError('Enter a vision-capable sensing model.');
       return;
@@ -2118,7 +2122,9 @@ export default function SessionChatView() {
 
           <div style={S.groupLabel}>Models &amp; providers</div>
           <div style={S.helpText}>
-            The sensing model receives screenshots. Saving changes restarts the local sensing and tutor services.
+            {visualCopilotMode
+              ? 'The Luma vision model receives only the region you select. Saving changes restarts the local selection service.'
+              : 'The sensing model receives screenshots. Saving changes restarts the local sensing and tutor services.'}
           </div>
           {modelConfigLoading && (
             <div style={{ ...S.helpText, marginTop: 8 }}>Loading model settings…</div>
@@ -2188,7 +2194,7 @@ export default function SessionChatView() {
                         ? S.sendBtnDisabled
                         : {}),
                     }}
-                    aria-label="Test sensing model connection"
+                    aria-label={`Test ${visualCopilotMode ? 'Luma vision' : 'sensing'} model connection`}
                     disabled={connectionTests.sensing?.state === 'testing'}
                     onClick={() => void testSettingsModelConnection(
                       'sensing',

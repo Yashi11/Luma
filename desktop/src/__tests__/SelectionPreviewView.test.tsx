@@ -50,7 +50,7 @@ describe('SelectionPreviewView microphone mute', () => {
     expect(sendMessage).not.toHaveBeenCalledWith('selection-voice-cancel');
     expect(mockPlayerStop).not.toHaveBeenCalled();
     expect(
-      screen.getByText('Microphone muted. Coco audio will keep playing.'),
+      screen.getByText('Microphone muted. Luma audio will keep playing.'),
     ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Unmute microphone' }),

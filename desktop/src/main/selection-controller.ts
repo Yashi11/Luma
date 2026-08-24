@@ -10,6 +10,7 @@ import {
 } from 'electron';
 import log from 'electron-log';
 import { serviceManager } from './services/manager';
+import { resolveModelRuntime } from './model-config-store';
 
 /* eslint-disable no-await-in-loop -- startup readiness polling is intentionally sequential */
 
@@ -134,6 +135,13 @@ export default class SelectionController {
   }
 
   startService(): void {
+    const runtime = resolveModelRuntime();
+    const visualModel = runtime?.config.sensing.provider === 'openai'
+      ? runtime.config.sensing.model
+      : process.env.OPENAI_MODEL?.trim() || 'gpt-5.6-sol';
+    const visualCredentials = runtime?.config.sensing.provider === 'openai'
+      ? runtime.sensingEnv
+      : {};
     serviceManager.configureServiceArg(
       'visual-copilot-server',
       'port',
@@ -143,9 +151,9 @@ export default class SelectionController {
       'visual-copilot-server',
       {
         VISUAL_COPILOT_CAPABILITY_TOKEN: this.token,
-        OPENAI_MODEL: process.env.OPENAI_MODEL?.trim() || 'gpt-5.6-sol',
-        ...(process.env.OPENAI_API_KEY?.trim()
-          ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY.trim() }
+        OPENAI_MODEL: visualModel,
+        ...(visualCredentials.OPENAI_API_KEY || process.env.OPENAI_API_KEY?.trim()
+          ? { OPENAI_API_KEY: visualCredentials.OPENAI_API_KEY || process.env.OPENAI_API_KEY?.trim() }
           : {}),
         ...(process.env.DEEPGRAM_API_KEY?.trim()
           ? { DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY.trim() }
@@ -233,7 +241,10 @@ export default class SelectionController {
 
   private async waitUntilReady(): Promise<void> {
     let lastError: unknown;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
+    // Cold-starting the Python runtime can take longer than the original
+    // six-second window. Keep the first selection pending while it becomes
+    // healthy instead of showing a misleading outage.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
       try {
         await this.api.get('/health', { timeout: 750 });
         return;

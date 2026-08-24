@@ -1,8 +1,8 @@
 {
-  "name": "coco",
-  "description": "Coco, your proactive co-assistant",
+  "name": "luma",
+  "description": "Luma, your visual copilot",
   "keywords": [
-    "coco",
+    "luma",
     "assistant",
     "electron",
     "react",
@@ -191,7 +191,7 @@
     "webpack-merge": "^6.0.1"
   },
   "build": {
-    "productName": "coco",
+    "productName": "Luma",
     "appId": "io.github.collaborative-agents.coco",
     "asar": true,
     "compression": "maximum",

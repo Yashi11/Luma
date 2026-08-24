@@ -82,7 +82,7 @@ import type {
 
 const dotenv = require('dotenv');
 
-app.setName('coco');
+app.setName('luma');
 
 // This product uses CoCo's desktop shell without its continuous observer.
 const VISUAL_COPILOT_MODE = true;
@@ -822,6 +822,9 @@ const openChatSettings = () => {
   }
 };
 
+ipcMain.removeAllListeners('open-chat-settings');
+ipcMain.on('open-chat-settings', () => openChatSettings());
+
 async function openCoco(): Promise<void> {
   if (isSessionActive && currentSessionId) {
     openChatForSession(currentSessionId, pendingTaskLabel || '');
@@ -905,11 +908,11 @@ function createTray(): void {
     tray.on('click', handleTrayClick);
   }
   if (VISUAL_COPILOT_MODE) {
-    tray.setToolTip('Visual Copilot — click Coco to select an area');
+  tray.setToolTip('Visual Copilot — click Luma to select an area');
     tray.setContextMenu(
       Menu.buildFromTemplate([
         {
-          label: 'Show Coco',
+        label: 'Show Luma',
           click: openPrimaryTrayAction,
         },
         {
@@ -1653,6 +1656,12 @@ ipcMain.handle(
             `[Models] Services restarted but active session restoration failed: ${(err as Error).message}`,
           );
         }
+      } else if (VISUAL_COPILOT_MODE) {
+        // Visual mode uses the saved sensing connection as its vision model.
+        // Restart only this service so changing a key/model takes effect
+        // without disturbing the selection window or the user's chat.
+        await serviceManager.stopService('visual-copilot-server');
+        selectionController?.startService();
       }
       return { success: true, config };
     } catch (err) {

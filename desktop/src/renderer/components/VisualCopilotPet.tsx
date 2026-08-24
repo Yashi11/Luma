@@ -23,9 +23,9 @@ export default function VisualCopilotPet() {
   };
 
   return (
-    <main className="visual-copilot-pet" aria-label="Coco Visual Copilot">
+    <main className="visual-copilot-pet" aria-label="Luma Visual Copilot">
       <div className="visual-copilot-pet__hint" aria-hidden>
-        Select with Coco
+        Select with Luma
       </div>
       <div className="visual-copilot-pet__sprite">
         <PetSprite mood="idle" variant="luma" active={chatActive} />
@@ -36,8 +36,8 @@ export default function VisualCopilotPet() {
           type="button"
           className="visual-copilot-pet__action"
           onClick={startSelection}
-          title="Select an area with Coco"
-          aria-label="Select an area with Coco"
+          title="Select an area with Luma"
+          aria-label="Select an area with Luma"
         />
       </div>
     </main>

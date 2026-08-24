@@ -467,7 +467,7 @@ export default function SelectionPreviewView() {
     voiceState === 'speaking' ||
     voiceState === 'answering';
   const voiceStatus = muted
-    ? 'Microphone muted. Coco audio will keep playing.'
+        ? 'Microphone muted. Luma audio will keep playing.'
     : {
         requesting: 'Opening the live voice stream…',
         listening: 'Listening and transcribing live…',
@@ -488,10 +488,22 @@ export default function SelectionPreviewView() {
               ⌖
             </span>
             <div>
-              <strong>Coco</strong>
+              <strong>Luma</strong>
               <span>Visual Copilot · selected pixels only</span>
             </div>
           </div>
+          <div className="selection-card__header-actions">
+          <button
+            className="selection-card__close selection-card__settings"
+            type="button"
+            aria-label="Open Luma settings"
+            title="Settings"
+            onClick={() =>
+              window.electron.ipcRenderer.sendMessage('open-chat-settings')
+            }
+          >
+            <span aria-hidden>⚙</span>
+          </button>
           <button
             className="selection-card__close"
             type="button"
@@ -514,6 +526,7 @@ export default function SelectionPreviewView() {
           >
             <span aria-hidden>×</span>
           </button>
+          </div>
         </header>
 
         {state.imageDataUrl && (

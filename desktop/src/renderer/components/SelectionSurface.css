@@ -335,6 +335,13 @@ body,
   -webkit-app-region: drag;
 }
 
+.selection-card__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  -webkit-app-region: no-drag;
+}
+
 .selection-card__identity {
   display: flex;
   align-items: center;
