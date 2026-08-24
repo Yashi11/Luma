@@ -57,9 +57,11 @@ export type Channels =
   | 'hide-onboarding'
   | 'get-profile'
   | 'get-model-configuration'
+  | 'get-service-configuration'
   | 'get-service-health'
   | 'test-model-connection'
   | 'save-model-configuration'
+  | 'save-service-configuration'
   | 'set-chat-model'
   // Settings (post-onboarding profile edits)
   | 'save-profile'

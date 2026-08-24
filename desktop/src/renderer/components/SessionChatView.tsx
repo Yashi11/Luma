@@ -22,6 +22,7 @@ import type { LLMCallMetrics, TutorToolCall } from './observation-types';
 const IS_MAC =
   typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 const HOTKEY_LABEL = IS_MAC ? 'Cmd + Shift + Space' : 'Ctrl + Shift + Space';
+const LUMA_LAVENDER = '#a09cff';
 
 // ── Tutor guidance parsing ─────────────────────────────────────────────────────
 // The local tutor server returns a JSON envelope string, e.g.
@@ -646,6 +647,15 @@ export default function SessionChatView() {
   const [modelLoadError, setModelLoadError] = useState('');
   const [modelSaveError, setModelSaveError] = useState('');
   const [modelSavedFlash, setModelSavedFlash] = useState(false);
+  const [deepgramApiKey, setDeepgramApiKey] = useState('');
+  const [elevenLabsApiKey, setElevenLabsApiKey] = useState('');
+  const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState('');
+  const [voiceConfigStatus, setVoiceConfigStatus] = useState({
+    deepgramConfigured: false,
+    elevenLabsConfigured: false,
+  });
+  const [voiceConfigError, setVoiceConfigError] = useState('');
+  const [voiceSavedFlash, setVoiceSavedFlash] = useState(false);
   const [serviceHealth, setServiceHealth] = useState<ServiceHealthView | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [healthError, setHealthError] = useState('');
@@ -1148,6 +1158,14 @@ export default function SessionChatView() {
       })
       .finally(() => setModelConfigLoading(false));
     window.electron?.ipcRenderer
+      .invoke('get-service-configuration')
+      .then((config: any) => {
+        if (!config) return;
+        setVoiceConfigStatus(config);
+        setElevenLabsVoiceId(String(config.elevenLabsVoiceId ?? ''));
+      })
+      .catch(() => {});
+    window.electron?.ipcRenderer
       .invoke('get-profile')
       .then((p: any) => {
         if (!p) return;
@@ -1274,6 +1292,24 @@ export default function SessionChatView() {
 
   const toggleEditTool = (id: string) =>
     setEditTools((prev) => (prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id]));
+
+  const saveVoiceSettings = async () => {
+    setVoiceConfigError('');
+    const result = await window.electron?.ipcRenderer.invoke('save-service-configuration', {
+      deepgramApiKey,
+      elevenLabsApiKey,
+      elevenLabsVoiceId,
+    });
+    if (!(result as { success?: boolean })?.success) {
+      setVoiceConfigError((result as { error?: string })?.error || 'Could not save voice settings.');
+      return;
+    }
+    setVoiceConfigStatus((result as any).config);
+    setDeepgramApiKey('');
+    setElevenLabsApiKey('');
+    setVoiceSavedFlash(true);
+    setTimeout(() => setVoiceSavedFlash(false), 1500);
+  };
 
   const addCustomChatbot = () => {
     if (!cbName.trim() || !cbUrl.trim()) return;
@@ -2122,7 +2158,10 @@ export default function SessionChatView() {
           )}
           <div style={S.sectionDivider} />
 
-          <div style={S.groupLabel}>Models &amp; providers</div>
+          <div style={S.groupLabel}>LLM</div>
+          <div style={{ ...S.helpText, fontWeight: 700, color: LUMA_LAVENDER, marginTop: 0 }}>
+            Models &amp; providers
+          </div>
           <div style={S.helpText}>
             {visualCopilotMode
               ? 'The Luma vision model receives only the region you select. Saving changes restarts the local selection service.'
@@ -2370,6 +2409,52 @@ export default function SessionChatView() {
               {modelSaveError && (
                 <div style={{ color: RED, fontSize: 11.5, marginBottom: 12 }}>
                   {modelSaveError}
+                </div>
+              )}
+              <div style={S.sectionDivider} />
+              <div style={S.groupLabel}>ASR · speech to text</div>
+              <div style={S.helpText}>
+                Deepgram transcribes voice messages. Your key is stored locally and never displayed again.
+              </div>
+              <input
+                style={S.customInput}
+                type="password"
+                autoComplete="off"
+                placeholder={voiceConfigStatus.deepgramConfigured ? 'Deepgram API key saved' : 'Deepgram API key'}
+                value={deepgramApiKey}
+                onChange={(event) => setDeepgramApiKey(event.target.value)}
+              />
+              <div style={{ ...S.healthDetail, marginTop: 6 }}>
+                {voiceConfigStatus.deepgramConfigured ? 'Configured' : 'Not configured'}
+              </div>
+
+              <div style={S.groupLabel}>TTS · text to speech</div>
+              <div style={S.helpText}>
+                ElevenLabs speaks Luma&apos;s voice responses. Add a voice ID to enable spoken replies.
+              </div>
+              <input
+                style={S.customInput}
+                type="password"
+                autoComplete="off"
+                placeholder={voiceConfigStatus.elevenLabsConfigured ? 'ElevenLabs API key saved' : 'ElevenLabs API key'}
+                value={elevenLabsApiKey}
+                onChange={(event) => setElevenLabsApiKey(event.target.value)}
+              />
+              <input
+                style={S.customInput}
+                placeholder="ElevenLabs voice ID"
+                value={elevenLabsVoiceId}
+                onChange={(event) => setElevenLabsVoiceId(event.target.value)}
+              />
+              <div style={{ ...S.saveRow, marginBottom: 14 }}>
+                <button type="button" style={S.saveBtn} onClick={saveVoiceSettings}>
+                  Save voice settings
+                </button>
+                {voiceSavedFlash && <span style={S.saved}>✓ Saved</span>}
+              </div>
+              {voiceConfigError && (
+                <div style={{ color: RED, fontSize: 11.5, marginBottom: 12 }}>
+                  {voiceConfigError}
                 </div>
               )}
               <div style={S.sectionDivider} />

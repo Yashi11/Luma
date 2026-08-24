@@ -63,11 +63,14 @@ import {
 } from './conversation-store';
 import {
   defaultTutor,
+  getServiceConfigurationView,
   getModelConfigurationView,
   prepareModelConnectionTest,
   readModelConfiguration,
   resolveModelRuntime,
   saveModelConfiguration,
+  saveServiceConfiguration,
+  type ServiceConfigurationInput,
   type ModelConfigurationInput,
   type ModelConnection,
 } from './model-config-store';
@@ -1187,6 +1190,22 @@ ipcMain.handle('get-chat-content-zoom-factor', () => chatContentZoomFactor);
 // only masked credential status; plaintext keys are accepted on save and never
 // returned over IPC.
 ipcMain.handle('get-model-configuration', () => getModelConfigurationView());
+ipcMain.handle('get-service-configuration', () => getServiceConfigurationView());
+ipcMain.handle(
+  'save-service-configuration',
+  async (_event, input: ServiceConfigurationInput) => {
+    try {
+      const config = saveServiceConfiguration(input);
+      if (VISUAL_COPILOT_MODE && selectionController) {
+        await serviceManager.stopService('visual-copilot-server');
+        selectionController.startService();
+      }
+      return { success: true, config };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  },
+);
 
 type ModelHealthAssessment = {
   status:

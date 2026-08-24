@@ -79,6 +79,8 @@ const configPath = () =>
   path.join(app.getPath('userData'), 'coco-model-config.json');
 const credentialsPath = () =>
   path.join(app.getPath('userData'), 'coco-model-credentials.json');
+const serviceCredentialsPath = () =>
+  path.join(app.getPath('userData'), 'coco-service-credentials.json');
 
 export const credentialId = (
   role: 'sensing' | 'tutor',
@@ -167,6 +169,48 @@ function atomicWrite(file: string, data: string | Buffer): void {
 
 function writeCredentials(credentials: CredentialMap): void {
   atomicWrite(credentialsPath(), `${JSON.stringify(credentials, null, 2)}\n`);
+}
+
+export interface ServiceConfigurationInput {
+  deepgramApiKey?: string;
+  elevenLabsApiKey?: string;
+  elevenLabsVoiceId?: string;
+}
+
+export interface ServiceConfigurationView {
+  deepgramConfigured: boolean;
+  elevenLabsConfigured: boolean;
+  elevenLabsVoiceId: string;
+}
+
+export function readServiceCredentials(): ServiceConfigurationInput {
+  try {
+    return JSON.parse(fs.readFileSync(serviceCredentialsPath(), 'utf8')) as ServiceConfigurationInput;
+  } catch {
+    return {};
+  }
+}
+
+export function getServiceConfigurationView(): ServiceConfigurationView {
+  const credentials = readServiceCredentials();
+  return {
+    deepgramConfigured: Boolean(credentials.deepgramApiKey),
+    elevenLabsConfigured: Boolean(credentials.elevenLabsApiKey),
+    elevenLabsVoiceId: credentials.elevenLabsVoiceId ?? '',
+  };
+}
+
+export function saveServiceConfiguration(
+  input: ServiceConfigurationInput,
+): ServiceConfigurationView {
+  const current = readServiceCredentials();
+  const next: ServiceConfigurationInput = {
+    deepgramApiKey: input.deepgramApiKey?.trim() || current.deepgramApiKey,
+    elevenLabsApiKey: input.elevenLabsApiKey?.trim() || current.elevenLabsApiKey,
+    elevenLabsVoiceId: input.elevenLabsVoiceId?.trim() || current.elevenLabsVoiceId,
+  };
+  atomicWrite(serviceCredentialsPath(), `${JSON.stringify(next, null, 2)}\n`);
+  return getServiceConfigurationView();
 }
 
 export function readModelConfiguration(): ModelConfiguration | null {

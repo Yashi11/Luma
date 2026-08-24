@@ -320,9 +320,9 @@ describe('instant suggestion actions', () => {
       />,
     );
 
-    const coco = screen.getByRole('button', { name: 'Open Coco Chat' });
-    expect(coco).toHaveClass('toast-coco-chat-action');
-    fireEvent.click(coco);
+    const luma = screen.getByRole('button', { name: 'Open Luma Chat' });
+    expect(luma).toHaveClass('toast-coco-chat-action');
+    fireEvent.click(luma);
     expect(onOpenCocoChat).toHaveBeenCalledTimes(1);
   });
 });

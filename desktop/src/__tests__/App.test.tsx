@@ -82,7 +82,7 @@ describe('App', () => {
     });
 
     fireEvent.click(screen.getByTitle('More actions'));
-    fireEvent.click(screen.getByText('Wake Coco'));
+    fireEvent.click(screen.getByText('Wake Luma'));
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('set-coco-sleep-mode', {
         sleeping: false,
@@ -136,12 +136,12 @@ describe('App', () => {
     });
     fireEvent.click(screen.getByTitle('More actions'));
     expect(
-      screen.getByRole('menu', { name: 'Coco actions' }),
+      screen.getByRole('menu', { name: 'Luma actions' }),
     ).toBeInTheDocument();
 
     fireEvent.blur(window);
     expect(
-      screen.queryByRole('menu', { name: 'Coco actions' }),
+      screen.queryByRole('menu', { name: 'Luma actions' }),
     ).not.toBeInTheDocument();
   });
 });

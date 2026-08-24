@@ -10,7 +10,7 @@ import {
 } from 'electron';
 import log from 'electron-log';
 import { serviceManager } from './services/manager';
-import { resolveModelRuntime } from './model-config-store';
+import { readServiceCredentials, resolveModelRuntime } from './model-config-store';
 
 /* eslint-disable no-await-in-loop -- startup readiness polling is intentionally sequential */
 
@@ -142,6 +142,7 @@ export default class SelectionController {
     const visualCredentials = runtime?.config.sensing.provider === 'openai'
       ? runtime.sensingEnv
       : {};
+    const serviceCredentials = readServiceCredentials();
     serviceManager.configureServiceArg(
       'visual-copilot-server',
       'port',
@@ -155,14 +156,14 @@ export default class SelectionController {
         ...(visualCredentials.OPENAI_API_KEY || process.env.OPENAI_API_KEY?.trim()
           ? { OPENAI_API_KEY: visualCredentials.OPENAI_API_KEY || process.env.OPENAI_API_KEY?.trim() }
           : {}),
-        ...(process.env.DEEPGRAM_API_KEY?.trim()
-          ? { DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY.trim() }
+        ...(serviceCredentials.deepgramApiKey || process.env.DEEPGRAM_API_KEY?.trim()
+          ? { DEEPGRAM_API_KEY: serviceCredentials.deepgramApiKey || process.env.DEEPGRAM_API_KEY?.trim() }
           : {}),
-        ...(process.env.ELEVENLABS_API_KEY?.trim()
-          ? { ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY.trim() }
+        ...(serviceCredentials.elevenLabsApiKey || process.env.ELEVENLABS_API_KEY?.trim()
+          ? { ELEVENLABS_API_KEY: serviceCredentials.elevenLabsApiKey || process.env.ELEVENLABS_API_KEY?.trim() }
           : {}),
-        ...(process.env.ELEVEN_LABS_VOICE_ID?.trim()
-          ? { ELEVEN_LABS_VOICE_ID: process.env.ELEVEN_LABS_VOICE_ID.trim() }
+        ...(serviceCredentials.elevenLabsVoiceId || process.env.ELEVEN_LABS_VOICE_ID?.trim()
+          ? { ELEVEN_LABS_VOICE_ID: serviceCredentials.elevenLabsVoiceId || process.env.ELEVEN_LABS_VOICE_ID?.trim() }
           : {}),
         VISUAL_COPILOT_CAPTURE_MODE: 'electron',
       },

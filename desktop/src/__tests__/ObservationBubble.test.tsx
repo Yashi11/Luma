@@ -110,11 +110,11 @@ describe('ObservationBubble controls', () => {
     const actions = screen
       .getAllByRole('button')
       .map((button) => button.textContent);
-    expect(actions.indexOf('Open Coco Chat')).toBeLessThan(
+    expect(actions.indexOf('Open Luma Chat')).toBeLessThan(
       actions.indexOf('Open ChatGPT'),
     );
     expect(actions).toContain('Open Claude');
-    fireEvent.click(screen.getByRole('button', { name: 'Open Coco Chat' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Luma Chat' }));
     expect(onOpenCocoChat).toHaveBeenCalledTimes(1);
   });
 });
