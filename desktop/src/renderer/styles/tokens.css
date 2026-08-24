@@ -1,0 +1,188 @@
+/*
+ * ── Visual Copilot design tokens ─────────────────────────────────────────────
+ * Single source of truth for every surface (avatar bubble, history, toasts,
+ * selection flow, onboarding, chat). One accent, one type stack, one material.
+ *
+ * Language: macOS-native glass — translucent surfaces, hairline borders,
+ * soft layered shadows, SF type, generous radii, quiet motion.
+ * ────────────────────────────────────────────────────────────────────────────
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Typography */
+  --vc-font:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+  --vc-font-rounded:
+    ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, sans-serif;
+  --vc-font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Accent — indigo */
+  --vc-accent: #5a5bd6;
+  --vc-accent-strong: #4a49c4;
+  --vc-accent-soft: rgba(90, 91, 214, 0.13);
+  --vc-accent-softer: rgba(90, 91, 214, 0.07);
+  --vc-accent-border: rgba(90, 91, 214, 0.32);
+  --vc-on-accent: #ffffff;
+
+  /* Brand — the fox */
+  --vc-brand: #f47a3d;
+  --vc-brand-deep: #d95f26;
+
+  /* Neutrals */
+  --vc-ink: #1a2130;
+  --vc-ink-2: #3d4657;
+  --vc-muted: #68738a;
+  --vc-faint: #98a0b3;
+  --vc-hairline: rgba(24, 34, 52, 0.09);
+  --vc-fill: rgba(24, 34, 52, 0.045);
+  --vc-fill-strong: rgba(24, 34, 52, 0.08);
+
+  /* Surfaces & materials */
+  --vc-surface: rgba(255, 255, 255, 0.88);
+  --vc-surface-solid: #ffffff;
+  --vc-surface-2: rgba(255, 255, 255, 0.6);
+  --vc-surface-input: rgba(255, 255, 255, 0.72);
+  --vc-overlay-scrim: rgba(255, 255, 255, 0.55);
+  --vc-overlay-surface: rgba(17, 23, 36, 0.78);
+  --vc-overlay-ink: #ffffff;
+  --vc-overlay-muted: rgba(203, 213, 228, 0.88);
+
+  /* Deliberately light surfaces used inside product-preview illustrations. */
+  --vc-fixed-light-surface: #ffffff;
+  --vc-fixed-light-surface-2: #f4f5f8;
+  --vc-fixed-light-accent: #5a5bd6;
+  --vc-fixed-light-accent-strong: #4a49c4;
+  --vc-fixed-light-accent-soft: rgba(90, 91, 214, 0.13);
+  --vc-fixed-light-accent-softer: rgba(90, 91, 214, 0.07);
+  --vc-fixed-light-accent-border: rgba(90, 91, 214, 0.32);
+  --vc-fixed-light-ink: #1a2130;
+  --vc-fixed-light-ink-2: #3d4657;
+  --vc-fixed-light-muted: #68738a;
+  --vc-fixed-light-faint: #98a0b3;
+  --vc-fixed-light-hairline: rgba(24, 34, 52, 0.09);
+  --vc-fixed-light-fill: rgba(24, 34, 52, 0.045);
+  --vc-glass: blur(24px) saturate(1.5);
+  --vc-glass-heavy: blur(36px) saturate(1.6);
+
+  /* Status hues (accents stay saturated; fills stay quiet) */
+  --vc-green: #1f9d61;
+  --vc-green-ink: #167548;
+  --vc-green-soft: rgba(31, 157, 97, 0.14);
+  --vc-green-border: rgba(31, 157, 97, 0.34);
+  --vc-orange: #ec7108;
+  --vc-orange-soft: rgba(236, 113, 8, 0.14);
+  --vc-amber: #c98a04;
+  --vc-amber-ink: #855b00;
+  --vc-amber-soft: rgba(201, 138, 4, 0.16);
+  --vc-amber-border: rgba(201, 138, 4, 0.36);
+  --vc-sky: #0b93d1;
+  --vc-sky-soft: rgba(11, 147, 209, 0.14);
+  --vc-purple: #9e4edd;
+  --vc-purple-ink: #7b35ad;
+  --vc-purple-soft: rgba(158, 78, 221, 0.14);
+  --vc-red: #d93036;
+  --vc-red-ink: #b4232a;
+  --vc-red-soft: rgba(217, 48, 54, 0.1);
+  --vc-red-border: rgba(217, 48, 54, 0.3);
+
+  /* Radii */
+  --vc-r-xs: 7px;
+  --vc-r-s: 9px;
+  --vc-r-m: 12px;
+  --vc-r-l: 16px;
+  --vc-r-xl: 20px;
+  --vc-r-pill: 999px;
+
+  /* Shadows — layered, cool-tinted, never muddy */
+  --vc-shadow-1:
+    0 1px 2px rgba(18, 27, 43, 0.05), 0 2px 8px rgba(18, 27, 43, 0.06);
+  --vc-shadow-2:
+    0 2px 6px rgba(18, 27, 43, 0.06), 0 12px 32px rgba(18, 27, 43, 0.14);
+  --vc-shadow-3:
+    0 24px 64px rgba(15, 23, 42, 0.2), 0 4px 16px rgba(15, 23, 42, 0.09);
+  --vc-shadow-accent:
+    0 6px 16px rgba(90, 91, 214, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+
+  /* Motion */
+  --vc-ease: cubic-bezier(0.22, 0.9, 0.28, 1);
+  --vc-ease-spring: cubic-bezier(0.34, 1.4, 0.44, 1);
+  --vc-t-fast: 140ms;
+  --vc-t-med: 220ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --vc-accent: #8383f1;
+    --vc-accent-strong: #9a9af6;
+    --vc-accent-soft: rgba(131, 131, 241, 0.18);
+    --vc-accent-softer: rgba(131, 131, 241, 0.1);
+    --vc-accent-border: rgba(131, 131, 241, 0.42);
+    --vc-on-accent: #ffffff;
+
+    --vc-brand: #ff8f52;
+    --vc-brand-deep: #f47a3d;
+
+    --vc-ink: #f0f2f8;
+    --vc-ink-2: #c6ccdb;
+    --vc-muted: #9aa3b6;
+    --vc-faint: #6d7689;
+    --vc-hairline: rgba(255, 255, 255, 0.11);
+    --vc-fill: rgba(255, 255, 255, 0.06);
+    --vc-fill-strong: rgba(255, 255, 255, 0.1);
+
+    --vc-surface: rgba(30, 32, 42, 0.86);
+    --vc-surface-solid: #242632;
+    --vc-surface-2: rgba(30, 32, 42, 0.6);
+    --vc-surface-input: rgba(16, 17, 24, 0.5);
+    --vc-overlay-scrim: rgba(12, 13, 20, 0.5);
+
+    --vc-green: #4cc38a;
+    --vc-green-ink: #67d5a1;
+    --vc-green-soft: rgba(76, 195, 138, 0.16);
+    --vc-green-border: rgba(76, 195, 138, 0.38);
+    --vc-orange: #ff9233;
+    --vc-orange-soft: rgba(255, 146, 51, 0.16);
+    --vc-amber: #e5b323;
+    --vc-amber-ink: #f2c84b;
+    --vc-amber-soft: rgba(229, 179, 35, 0.18);
+    --vc-amber-border: rgba(229, 179, 35, 0.4);
+    --vc-sky: #45b6ec;
+    --vc-sky-soft: rgba(69, 182, 236, 0.16);
+    --vc-purple: #bf7ef0;
+    --vc-purple-ink: #d6a1f5;
+    --vc-purple-soft: rgba(191, 126, 240, 0.16);
+    --vc-red: #ff6961;
+    --vc-red-ink: #ff8a84;
+    --vc-red-soft: rgba(255, 105, 97, 0.14);
+    --vc-red-border: rgba(255, 105, 97, 0.36);
+
+    --vc-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.24);
+    --vc-shadow-2: 0 2px 6px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.4);
+    --vc-shadow-3:
+      0 24px 64px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.32);
+    --vc-shadow-accent:
+      0 6px 16px rgba(90, 91, 214, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --vc-t-fast: 0ms;
+    --vc-t-med: 0ms;
+    --vc-ease: linear;
+    --vc-ease-spring: linear;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

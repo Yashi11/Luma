@@ -3,13 +3,66 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "visual-copilot"
+name = "visual-copilot-coco"
 version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = []
-
-[project.optional-dependencies]
-capture = ["mss>=9.0", "Pillow>=10.0"]
+description = "Privacy-first user-annotated visual copilot built on the CoCo desktop shell."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.12"
+dependencies = [
+    "sensing",
+    "proactive_tutor",
+    "external_api",
+    "py_utils",
+    "memory",
+    "memory-mcp",
+    "openai>=2.0,<3",
+    "mss>=9.0",
+    "Pillow>=10.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "websockets>=17,<18",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv.sources]
+sensing = { workspace = true }
+proactive_tutor = { workspace = true }
+external_api = { workspace = true }
+py_utils = { workspace = true }
+memory = { workspace = true }
+memory-mcp = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "lib/sensing",
+    "lib/proactive_tutor",
+    "lib/external_api",
+    "lib/py_utils",
+    "lib/memory",
+    "lib/memory_mcp",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=3.6.0",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.14.0",
+    "pyinstaller>=6.0.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+lint.select = ["E", "W", "F", "I", "B", "C4", "UP"]
+lint.ignore = ["E501", "B008", "UP046", "UP047"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py", "*_test.py"]
+asyncio_mode = "auto"

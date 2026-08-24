@@ -1,19 +1,50 @@
-# User-Annotated Visual Copilot for macOS
+# Visual Copilot for macOS
 
-V1 foundation for a privacy-first, explicit visual explanation flow:
+Point at anything on your Mac and ask about it without changing context.
 
-`hotkey → rectangle selection → exact in-memory crop → preview → explain`
+Visual Copilot reuses the CoCo Electron shell while replacing its default continuous-observation path with an explicit, user-initiated flow:
 
-The capture and outbound-data contracts live in `src/visual_copilot`. The package is intentionally independent of Electron so the coordinate and privacy invariants can be tested on every platform before wiring macOS window capture and the UI shell.
+`click Coco or use the hotkey → rectangle/freeform selection → exact in-memory crop → preview/question → explain`
+
+## V1 privacy contract
+
+Only a decoded, dimension-checked PNG cryptographically bound to the frozen selection context can reach the OpenAI provider adapter. The question defaults to `Explain this.` and outbound metadata is allowlisted. No AX data, app/window identity, cursor history, arbitrary image bytes, screenshot path, observer history, or full-monitor fallback is accepted.
+
+The V1 model receives no tools and returns structured `{explanation, uncertainty, needs_more_context}` data. If more context is needed, the answer card offers a new selection rather than silently broadening capture.
+
+## Architecture
+
+- **CoCo Electron shell:** clickable desktop pet, global shortcut, rectangle/freeform `SelectionOverlay`, preview/question card, answer card, and trusted main-process IPC.
+- **Python selection service:** immutable display snapshot, DIP-to-pixel mapping, region-only `mss` capture, PNG verification, hash/provenance, cancellation, and retry lifecycle.
+- **OpenAI Responses API:** base64 PNG input, structured output, `store=False`, and no tools.
+
+The observer, observer input listeners, old full-monitor hotkey route, TTS, Accessibility enrichment, dataset collection, and autonomous actions are disabled for V1. CoCo's intentional avatar, settings, conversation, and local-history surfaces remain available.
 
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -v
+uv sync
+uv run pytest
+
+cd desktop
+npm install
+npm start
 ```
 
-Optional capture support uses `mss` and PNG encoding uses Pillow. They are kept optional so geometry/privacy tests remain runnable in CI without screen permissions.
+Set `OPENAI_API_KEY` before sending a selection. The OpenAI endpoint is fixed to `https://api.openai.com/v1`; the default model is `gpt-5.6-sol` and can be changed in the trusted service configuration.
 
-## V1 privacy contract
+See [docs/architecture.md](docs/architecture.md) for the implemented contracts and remaining test matrix.
 
-Only the validated selected crop, the user question (defaulting to `Explain this.`), and provider metadata explicitly supplied by the caller may leave the process. No full-screen frame, AX data, app/window identity, cursor history, or screenshot file is accepted by the outbound gate.
+## Upstream
+
+Visual Copilot is built on [CoCo: Proactive Co-Assistant Through Continuous Context Observation](https://github.com/collaborative-agents/coco) by Yijia Shao, Yihan Wang, Haowen Wang, and Diyi Yang. CoCo is used under the Apache License 2.0; see [LICENSE](LICENSE) and [PRIVACY.md](PRIVACY.md).
+
+```bibtex
+@software{coco2026,
+  title  = {Coco: Proactive Co-Assistant Through Continuous Context Observation},
+  author = {Shao, Yijia and Wang, Yihan and Wang, Haowen and Yang, Diyi},
+  year   = {2026},
+  url    = {https://github.com/collaborative-agents/coco},
+  note   = {Proactive co-assistant that senses computer-use context and offers timely help, running fully on-device.}
+}
+```
