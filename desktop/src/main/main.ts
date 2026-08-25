@@ -3630,6 +3630,7 @@ app
         if (overlayVisible) avatarWindow.hide();
         else if (!isQuitting) avatarWindow.showInactive();
       },
+      notifyVisualCopilotChatActivity,
     );
     selectionController.startService();
     powerMonitor.on('suspend', () => {

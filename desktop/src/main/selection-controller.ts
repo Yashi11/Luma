@@ -125,6 +125,8 @@ export default class SelectionController {
     private readonly onOverlayVisibilityChange: (
       visible: boolean,
     ) => void = () => undefined,
+    private readonly onChatActivityChange: (active: boolean) => void = () =>
+      undefined,
   ) {
     this.api = axios.create({
       baseURL: `http://127.0.0.1:${port}`,
@@ -680,6 +682,7 @@ export default class SelectionController {
     if (event.type === 'transcript' && typeof event.text === 'string') {
       this.streamedQuestion = event.text.trim();
     } else if (event.type === 'llm_start') {
+      this.onChatActivityChange(true);
       this.previewState = {
         ...this.previewState,
         status: 'sending',
@@ -692,6 +695,7 @@ export default class SelectionController {
     ) {
       this.streamedAnswer += event.delta;
     } else if (event.type === 'complete') {
+      this.onChatActivityChange(false);
       const answer =
         typeof event.answer === 'string' && event.answer.trim()
           ? event.answer.trim()
@@ -717,12 +721,14 @@ export default class SelectionController {
       };
       this.publishPreview();
     } else if (event.type === 'voice_control') {
+      this.onChatActivityChange(false);
       this.previewState = {
         ...this.previewState,
         status: this.previewState.turns?.length ? 'answer' : 'preview',
       };
       this.publishPreview();
     } else if (event.type === 'error') {
+      this.onChatActivityChange(false);
       this.previewState = {
         ...this.previewState,
         status: this.previewState.turns?.length ? 'answer' : 'preview',
@@ -819,6 +825,7 @@ export default class SelectionController {
   }
 
   private closeVoiceSocket(): void {
+    this.onChatActivityChange(false);
     const socket = this.voiceSocket;
     this.voiceSocket = null;
     if (
