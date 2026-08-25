@@ -1,8 +1,8 @@
-# Visual Copilot for macOS
+# Luma:Visual Copilot for macOS
 
 Point at anything on your Mac and ask about it without changing context.
 
-Visual Copilot reuses the CoCo Electron shell while replacing its default continuous-observation path with an explicit, user-initiated flow:
+Luma reuses the CoCo Electron shell while replacing its default continuous-observation path with an explicit, user-initiated flow:
 
 `click Coco or use the hotkey → rectangle/freeform selection → exact in-memory crop → preview/question → explain`
 
