@@ -17,6 +17,7 @@ export default function VisualCopilotPet() {
           data.type !== 'activity_done',
       );
     });
+    window.electron?.ipcRenderer.sendMessage('avatar-renderer-ready');
     return () => {
       if (typeof cleanup === 'function') cleanup();
     };

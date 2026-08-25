@@ -166,6 +166,7 @@ let sessionSetupWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let hideAvatarMode = false;
 let avatarRendererReady = false;
+let visualCopilotChatActive = false;
 let pendingOpenHistory = false;
 let cocoSleeping = false;
 const observationSleepGuard = new ObservationSleepGuard();
@@ -853,6 +854,7 @@ function showVisualCopilotPet(): void {
 }
 
 function notifyVisualCopilotChatActivity(active: boolean): void {
+  visualCopilotChatActive = active;
   if (!avatarWindow || avatarWindow.isDestroyed()) return;
   avatarWindow.webContents.send('chat-stream-event', {
     requestId: 'visual-copilot-chat-activity',
@@ -2172,6 +2174,12 @@ ipcMain.on(
 ipcMain.removeAllListeners('avatar-renderer-ready');
 ipcMain.on('avatar-renderer-ready', () => {
   avatarRendererReady = true;
+  if (visualCopilotChatActive && avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send('chat-stream-event', {
+      requestId: 'visual-copilot-chat-activity',
+      type: 'activity_started',
+    });
+  }
   if (pendingOpenHistory) openHistory();
 });
 
