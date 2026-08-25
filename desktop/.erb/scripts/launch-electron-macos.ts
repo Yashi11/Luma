@@ -3,10 +3,24 @@ import fs from 'fs';
 import path from 'path';
 
 const desktopRoot = path.resolve(__dirname, '../..');
-const electronBinary =
-  process.platform === 'win32'
-    ? path.join(desktopRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
-    : path.join(desktopRoot, 'node_modules', 'electron', 'dist', 'electron');
+const electronDistPath = path.join(
+  desktopRoot,
+  'node_modules',
+  'electron',
+  'dist',
+);
+let electronBinary = path.join(electronDistPath, 'electron');
+if (process.platform === 'win32') {
+  electronBinary = path.join(electronDistPath, 'electron.exe');
+} else if (process.platform === 'darwin') {
+  electronBinary = path.join(
+    electronDistPath,
+    'Electron.app',
+    'Contents',
+    'MacOS',
+    'Electron',
+  );
+}
 const entryPath = path.join(__dirname, 'launch-services-entry.cjs');
 const pidPath = path.join(desktopRoot, '.erb', 'dll', 'coco-dev.pid');
 const stdoutPath = path.join(desktopRoot, '.erb', 'dll', 'coco-dev.stdout.log');
