@@ -55,13 +55,10 @@ export default function SelectionPreviewView() {
   const nudgeActiveRef = useRef(true);
   const contextNudgeRef = useRef(DEFAULT_CONTEXT_NUDGE);
   const beginVoiceRef = useRef<() => Promise<void>>(async () => {});
-  const startBargeMonitorRef = useRef<() => Promise<void>>(async () => {});
   const setMutedRef = useRef<(nextMuted: boolean) => Promise<void>>(
     async () => {},
   );
   const mutedRef = useRef(false);
-  const bargeMonitorActiveRef = useRef(false);
-  const ignoreAnswerAudioRef = useRef(false);
   const playbackGenerationRef = useRef(0);
   const wakeWordPausedRef = useRef(false);
   const voiceTurnStartingRef = useRef(false);
@@ -139,9 +136,11 @@ export default function SelectionPreviewView() {
           serverSpeechEndedRef.current = true;
           recorderRef.current?.stop();
         } else if (event.type === 'llm_start') {
-          ignoreAnswerAudioRef.current = false;
           setVoiceState('answering');
-          startBargeMonitorRef.current().catch(() => undefined);
+          // Do not open a second microphone turn while Luma is speaking.
+          // Speaker output can pass the echo-cancellation threshold and be
+          // mistaken for a user barge-in, which cancels the active TTS stream.
+          // The next voice turn starts after playback drains in `complete`.
         } else if (
           event.type === 'answer_delta' &&
           typeof event.delta === 'string'
@@ -150,7 +149,7 @@ export default function SelectionPreviewView() {
         } else if (
           event.type === 'audio_chunk' &&
           typeof event.audio === 'string' &&
-          !ignoreAnswerAudioRef.current
+          event.audio.length > 0
         ) {
           audioReceivedRef.current = true;
           pcmPlayerRef.current.enqueue(
@@ -180,8 +179,7 @@ export default function SelectionPreviewView() {
             } else if (
               mountedRef.current &&
               !mutedRef.current &&
-              !voiceTurnStartingRef.current &&
-              !bargeMonitorActiveRef.current
+              !voiceTurnStartingRef.current
             ) {
               await beginVoiceRef.current();
             }
@@ -261,7 +259,6 @@ export default function SelectionPreviewView() {
     }
     stopSpeech();
     nudgeActiveRef.current = false;
-    ignoreAnswerAudioRef.current = false;
     pcmPlayerRef.current.prepare();
     audioReceivedRef.current = false;
     setVoiceError('');
@@ -329,120 +326,6 @@ export default function SelectionPreviewView() {
     }
   };
   beginVoiceRef.current = handleVoice;
-
-  const startBargeMonitor = async () => {
-    if (
-      mutedRef.current ||
-      !mountedRef.current ||
-      recorderRef.current ||
-      bargeMonitorActiveRef.current
-    ) {
-      return;
-    }
-    bargeMonitorActiveRef.current = true;
-    let recorder: ActiveVoiceRecorder | null = null;
-    let speechStarted = false;
-    let streamReady = false;
-    let streamStarted = false;
-    let openInterruptedTurn: Promise<void> | null = null;
-    const queuedPcm: string[] = [];
-    try {
-      recorder = await startVoiceRecorder({
-        silenceMs: 1_500,
-        maxDurationMs: 120_000,
-        speechThreshold: 0.04,
-        minimumVoiceMs: 250,
-        onSpeechStart: () => {
-          if (speechStarted || mutedRef.current) return;
-          speechStarted = true;
-          playbackGenerationRef.current += 1;
-          ignoreAnswerAudioRef.current = true;
-          audioReceivedRef.current = false;
-          serverSpeechEndedRef.current = false;
-          stopSpeech();
-          setQuestion('');
-          setStreamAnswer('');
-          setVoiceError('');
-          setVoiceState('listening');
-          window.electron.ipcRenderer.sendMessage('selection-voice-cancel');
-          openInterruptedTurn = (async () => {
-            const start = (await window.electron.ipcRenderer.invoke(
-              'selection-voice-start',
-            )) as { ready?: boolean; error?: string } | undefined;
-            if (!start?.ready) {
-              throw new Error(
-                start?.error || 'Voice streaming service is unavailable.',
-              );
-            }
-            if (mutedRef.current) {
-              throw new Error('Voice recording cancelled.');
-            }
-            streamStarted = true;
-            streamReady = true;
-            queuedPcm
-              .splice(0)
-              .forEach((pcm) =>
-                window.electron.ipcRenderer.sendMessage(
-                  'selection-voice-audio',
-                  pcm,
-                ),
-              );
-          })();
-          openInterruptedTurn.catch(() => recorder?.stop());
-        },
-        onPcmChunk: (pcm) => {
-          if (!speechStarted) return;
-          if (streamReady) {
-            window.electron.ipcRenderer.sendMessage(
-              'selection-voice-audio',
-              pcm,
-            );
-          } else {
-            queuedPcm.push(pcm);
-          }
-        },
-        onStatus: (status) => {
-          if (speechStarted) setVoiceState(status);
-        },
-      });
-      recorderRef.current = recorder;
-      await recorder.done;
-      if (openInterruptedTurn) await openInterruptedTurn;
-      if (speechStarted && streamStarted) {
-        setVoiceState('transcribing');
-        if (!serverSpeechEndedRef.current) {
-          window.electron.ipcRenderer.sendMessage('selection-voice-stop');
-        }
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (speechStarted && streamStarted && !serverSpeechEndedRef.current) {
-        window.electron.ipcRenderer.sendMessage('selection-voice-stop');
-      }
-      if (
-        message !== 'Voice recording cancelled.' &&
-        !message.startsWith("I didn't hear any speech") &&
-        !mutedRef.current
-      ) {
-        setVoiceError(message);
-      }
-    } finally {
-      if (recorderRef.current === recorder) recorderRef.current = null;
-      bargeMonitorActiveRef.current = false;
-      if (
-        !speechStarted &&
-        mountedRef.current &&
-        !mutedRef.current &&
-        !recorderRef.current
-      ) {
-        window.setTimeout(
-          () => startBargeMonitorRef.current().catch(() => undefined),
-          0,
-        );
-      }
-    }
-  };
-  startBargeMonitorRef.current = startBargeMonitor;
 
   const changeMuted = async (nextMuted: boolean) => {
     mutedRef.current = nextMuted;
