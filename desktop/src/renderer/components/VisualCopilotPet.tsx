@@ -11,7 +11,11 @@ export default function VisualCopilotPet() {
     if (typeof on !== 'function') return undefined;
     const cleanup = on('chat-stream-event', (data: any) => {
       if (!data?.requestId) return;
-      setChatActive(data.type !== 'done' && data.type !== 'error');
+      setChatActive(
+        data.type !== 'done' &&
+          data.type !== 'error' &&
+          data.type !== 'activity_done',
+      );
     });
     return () => {
       if (typeof cleanup === 'function') cleanup();

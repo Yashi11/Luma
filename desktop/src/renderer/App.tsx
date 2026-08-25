@@ -489,6 +489,7 @@ function PetView() {
   const [records, setRecords] = useState<ActivityRecord[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [cocoSleeping, setCocoSleeping] = useState(false);
+  const [chatActive, setChatActive] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const petActionsRef = useRef<HTMLDivElement | null>(null);
   const avatarDragRef = useRef<{ x: number; y: number } | null>(null);
@@ -584,6 +585,20 @@ function PetView() {
     return () => {
       if (typeof cleanupToggle === 'function') cleanupToggle();
       if (typeof cleanupOpen === 'function') cleanupOpen();
+    };
+  }, []);
+
+  useEffect(() => {
+    const cleanup = window.electron?.ipcRenderer.on('chat-stream-event', (data: any) => {
+      if (!data?.requestId) return;
+      setChatActive(
+        data.type !== 'done' &&
+          data.type !== 'error' &&
+          data.type !== 'activity_done',
+      );
+    });
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
     };
   }, []);
 
@@ -1106,7 +1121,11 @@ function PetView() {
         />
       )}
       <div ref={petActionsRef} className="pet-container" onPointerDown={startAvatarDrag}>
-        <PetSprite mood={cocoSleeping ? 'sleep' : mood} variant="luma" active={mood !== 'idle' && mood !== 'dormant'} />
+        <PetSprite
+          mood={cocoSleeping ? 'sleep' : mood}
+          variant="luma"
+          active={!cocoSleeping && (chatActive || (mood !== 'idle' && mood !== 'dormant'))}
+        />
         <button
           type="button"
           className="open-button"
