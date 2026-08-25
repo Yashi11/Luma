@@ -3,13 +3,6 @@ import fs from 'fs';
 import path from 'path';
 
 const desktopRoot = path.resolve(__dirname, '../..');
-const electronApp = path.join(
-  desktopRoot,
-  'node_modules',
-  'electron',
-  'dist',
-  'Electron.app',
-);
 const electronBinary =
   process.platform === 'win32'
     ? path.join(desktopRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
@@ -51,30 +44,23 @@ function launch(): void {
   fs.rmSync(pidPath, { force: true });
   fs.writeFileSync(stdoutPath, '');
   fs.writeFileSync(stderrPath, '');
-  const args =
-    process.platform === 'darwin'
-      ? [
-          '-W',
-          '-n',
-          '-o',
-          stdoutPath,
-          '--stderr',
-          stderrPath,
-          '--env',
-          'NODE_ENV=development',
-          '--env',
-          'NODE_OPTIONS=',
-          '--env',
-          `COCO_DEV_PID_PATH=${pidPath}`,
-          electronApp,
-          '--args',
-          entryPath,
-          ...process.argv.slice(2),
-        ]
-      : [entryPath, ...process.argv.slice(2)];
-  const executable =
-    process.platform === 'darwin' ? '/usr/bin/open' : electronBinary;
-  launcher = spawn(executable, args, { cwd: desktopRoot, stdio: 'inherit' });
+  // Launch Electron directly on macOS. Using `/usr/bin/open` for the nested
+  // Electron.app can fail with LaunchServices -10810 before the main process
+  // starts, leaving webpack running with no desktop window. Direct execution
+  // also gives the launcher the real child PID for reliable hot reload and
+  // shutdown handling.
+  const args = [entryPath, ...process.argv.slice(2)];
+  const env = {
+    ...process.env,
+    NODE_ENV: 'development',
+    NODE_OPTIONS: '',
+    COCO_DEV_PID_PATH: pidPath,
+  };
+  launcher = spawn(electronBinary, args, {
+    cwd: desktopRoot,
+    stdio: 'inherit',
+    env,
+  });
   launcher.once('exit', (code, signal) => {
     launcher = null;
     fs.rmSync(pidPath, { force: true });
